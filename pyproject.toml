@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plankit"
+version = "0.1.0"
+description = "Skelet-generatie voor plattegronden: PvE naar een half-edge/DCEL (IFC-vrij)"
+authors = [{ name = "Sander Boer", email = "sanderboer@mauc.nl" }]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "LGPL-3.0-or-later" }
+keywords = ["floorplan", "topology", "spatial", "architecture", "bim"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: GIS",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.optional-dependencies]
+shapely = ["shapely>=2.0"]
+dev = ["pytest>=7.0", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["plankit*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
