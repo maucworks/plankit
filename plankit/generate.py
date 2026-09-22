@@ -16,6 +16,12 @@ from plankit.program import RoomProgram
 _EPS = 1e-6
 
 
+def _xy(p) -> tuple[float, float]:
+    if hasattr(p, "x"):
+        return (p.x, p.y)
+    return (p[0], p[1])
+
+
 def propose_layout(program: RoomProgram, depth: float = 4.0) -> dict:
     """Coarse stub: leg niet-exterieure ruimten in een strip.
 
@@ -49,8 +55,8 @@ def generate(program: RoomProgram, proposal: dict | None = None) -> PlanarSubdiv
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
         for key, rect in proposal.items():
-            xs = [p.x for p in rect]
-            ys = [p.y for p in rect]
+            xs = [_xy(p)[0] for p in rect]
+            ys = [_xy(p)[1] for p in rect]
             if min(xs) - _EPS < cx < max(xs) + _EPS and min(ys) - _EPS < cy < max(ys) + _EPS:
                 face_by_room[key] = fid
                 break
