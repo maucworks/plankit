@@ -55,6 +55,9 @@ def generate(program: RoomProgram, proposal: dict | None = None) -> PlanarSubdiv
                 face_by_room[key] = fid
                 break
 
+    for key, fid in face_by_room.items():
+        sd.faces[fid].label = key
+
     for edge in program.edges:
         if edge.kind != "door":
             continue

@@ -40,6 +40,7 @@ class HalfEdge:
 class Face:
     half_edge: int       # one incident half-edge index
     exterior: bool = False
+    label: str = ""      # ruimte-sleutel (PvE) of "" bij exterior/onbekend
 
 
 class PlanarSubdivision:
