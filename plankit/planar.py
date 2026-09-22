@@ -209,3 +209,46 @@ class PlanarSubdivision:
         twin = self.half_edges[he].twin
         self.half_edges[he].kind = kind
         self.half_edges[twin].kind = kind
+
+    # ----- serialisatie -----
+
+    def to_dict(self) -> dict:
+        """Return een JSON-serialiseerbare representatie (lossless round-trip)."""
+        return {
+            "vertices": [{"x": v.x, "y": v.y} for v in self.vertices],
+            "faces": [
+                {"half_edge": f.half_edge, "exterior": f.exterior, "label": f.label}
+                for f in self.faces
+            ],
+            "half_edges": [
+                {
+                    "origin": he.origin,
+                    "twin": he.twin,
+                    "next": he.next,
+                    "face": he.face,
+                    "kind": he.kind,
+                }
+                for he in self.half_edges
+            ],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PlanarSubdivision":
+        """Herbouw een subdivisie uit :meth:`to_dict`."""
+        sd = cls()
+        sd.vertices = [Vertex(v["x"], v["y"]) for v in data["vertices"]]
+        sd.faces = [
+            Face(half_edge=f["half_edge"], exterior=f["exterior"], label=f.get("label", ""))
+            for f in data["faces"]
+        ]
+        sd.half_edges = [
+            HalfEdge(
+                origin=he["origin"],
+                twin=he["twin"],
+                next=he["next"],
+                face=he["face"],
+                kind=he.get("kind", "wall"),
+            )
+            for he in data["half_edges"]
+        ]
+        return sd
