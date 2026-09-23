@@ -67,9 +67,11 @@ def to_svg(sd: PlanarSubdivision, width: int = 640, height: int = 480) -> str:
             f'<polygon points="{poly}" fill="{_PALETTE[fid % len(_PALETTE)]}" stroke="#555" stroke-width="1"/>'
         )
 
-    for he in sd.half_edges:
+    for he_id, he in enumerate(sd.half_edges):
         if he.kind != "door":
             continue
+        if he_id > he.twin:
+            continue  # elk twin-paar één keer
         a = sd.vertices[he.origin]
         b = sd.vertices[sd.half_edges[he.next].origin]
         parts.append(
@@ -119,11 +121,14 @@ def geometry_view(sd: PlanarSubdivision) -> dict:
         )
     ext = sd.exterior_face()
     doors = []
-    for he in sd.half_edges:
+    for he_id, he in enumerate(sd.half_edges):
         if he.kind != "door":
             continue
-        if he.face == ext or sd.half_edges[he.twin].face == ext:
+        twin = sd.half_edges[he.twin]
+        if he.face == ext or twin.face == ext:
             continue
+        if he_id > he.twin:
+            continue  # elk twin-paar één keer (zelfde segment)
         a = sd.vertices[he.origin]
         b = sd.vertices[sd.half_edges[he.next].origin]
         doors.append({"x1": a.x, "y1": a.y, "x2": b.x, "y2": b.y})

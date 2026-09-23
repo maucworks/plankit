@@ -9,6 +9,7 @@ geïmporteerd door `plankit/__init__.py` — fastapi is een optionele `[api]`-ex
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -34,6 +35,7 @@ def create_app(store: VariantStore | None = None) -> FastAPI:
     """Bouw de FastAPI-app; ``store`` is injecteerbaar (default in-memory)."""
     store = store or VariantStore(":memory:")
     app = FastAPI(title="plankit", version="0.1.0")
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
     def _summary(v):
         return {

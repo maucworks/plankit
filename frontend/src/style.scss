@@ -1,0 +1,75 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+header {
+  padding: 0.5rem 1rem;
+  background: #f0f0f0;
+  border-bottom: 1px solid #ddd;
+}
+
+header h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+#variants {
+  width: 220px;
+  border-right: 1px solid #ccc;
+  padding: 0.5rem;
+  overflow-y: auto;
+}
+
+#variants .item {
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+#variants .item:hover {
+  background: #eef;
+}
+
+#variants .hint {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+#viewer {
+  flex: 1;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+#scrub button {
+  margin: 0 0.5rem;
+}
+
+#plan {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #eee;
+}
+
+#report {
+  background: #fafafa;
+  border: 1px solid #eee;
+  padding: 0.5rem;
+  font-size: 12px;
+  max-height: 40%;
+  overflow: auto;
+}

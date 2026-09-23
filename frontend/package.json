@@ -1,0 +1,17 @@
+{
+  "name": "plankit-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && sass src/style.scss dist/style.css",
+    "watch": "tsc --watch",
+    "watch:sass": "sass --watch src/style.scss dist/style.css",
+    "serve": "npx serve . -l 3000"
+  },
+  "devDependencies": {
+    "sass-embedded": "^1.105.0",
+    "serve": "^14.2.0",
+    "typescript": "^5.6.0"
+  }
+}
