@@ -26,6 +26,7 @@ dependencies = []
 
 [project.optional-dependencies]
 shapely = ["shapely>=2.0"]
+api = ["fastapi>=0.111", "uvicorn>=0.30"]
 dev = ["pytest>=7.0", "ruff"]
 
 [tool.setuptools.packages.find]

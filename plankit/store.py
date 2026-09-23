@@ -5,12 +5,16 @@ Een :class:`Variant` is één generatiestap: het skelet (``state``), het PvE
 (``program``), het rapport (conformance + kwaliteit) en de lineage
 (``parent_id``). De store is de bron van waarheid voor de inspectie-loop; de
 platte JSONL-event-log is hierin gevouwen.
+
+De store is thread-safe: FastAPI draait sync-endpoints in een threadpool, dus
+de verbinding gebruikt ``check_same_thread=False`` plus een lock.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -67,11 +71,12 @@ def make_variant(
 
 
 class VariantStore:
-    """SQLite-gebaseerde opslag van varianten."""
+    """SQLite-gebaseerde opslag van varianten (thread-safe)."""
 
     def __init__(self, path: str = ":memory:") -> None:
-        self._conn = sqlite3.connect(path)
+        self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self._conn.execute(
             """CREATE TABLE IF NOT EXISTS variants (
                 id TEXT PRIMARY KEY,
@@ -89,49 +94,55 @@ class VariantStore:
         self._conn.commit()
 
     def add(self, v: Variant) -> Variant:
-        self._conn.execute(
-            "INSERT INTO variants VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (
-                v.id,
-                v.parent_id,
-                v.step,
-                v.label,
-                json.dumps(v.program),
-                json.dumps(v.proposal) if v.proposal is not None else None,
-                json.dumps(v.state),
-                json.dumps(v.report),
-                json.dumps(v.llm) if v.llm is not None else None,
-                v.created_at,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO variants VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    v.id,
+                    v.parent_id,
+                    v.step,
+                    v.label,
+                    json.dumps(v.program),
+                    json.dumps(v.proposal) if v.proposal is not None else None,
+                    json.dumps(v.state),
+                    json.dumps(v.report),
+                    json.dumps(v.llm) if v.llm is not None else None,
+                    v.created_at,
+                ),
+            )
+            self._conn.commit()
         return v
 
     def get(self, vid: str) -> Variant | None:
-        row = self._conn.execute("SELECT * FROM variants WHERE id=?", (vid,)).fetchone()
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM variants WHERE id=?", (vid,)).fetchone()
         return self._from_row(row) if row else None
 
     def children(self, parent_id: str) -> list[Variant]:
-        rows = self._conn.execute(
-            "SELECT * FROM variants WHERE parent_id=? ORDER BY step, id", (parent_id,)
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM variants WHERE parent_id=? ORDER BY step, id", (parent_id,)
+            ).fetchall()
         return [self._from_row(r) for r in rows]
 
     def roots(self) -> list[Variant]:
-        rows = self._conn.execute(
-            "SELECT * FROM variants WHERE parent_id IS NULL ORDER BY step, id"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM variants WHERE parent_id IS NULL ORDER BY step, id"
+            ).fetchall()
         return [self._from_row(r) for r in rows]
 
     def all(self) -> list[Variant]:
-        rows = self._conn.execute("SELECT * FROM variants ORDER BY step, id").fetchall()
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM variants ORDER BY step, id").fetchall()
         return [self._from_row(r) for r in rows]
 
     def filter(self, predicate) -> list[Variant]:
         return [v for v in self.all() if predicate(v)]
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> Variant:

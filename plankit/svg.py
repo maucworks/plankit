@@ -104,3 +104,27 @@ def scrub_page(variants, width: int = 640, height: int = 480) -> str:
         )
     max_i = max(len(frames) - 1, 0)
     return _HTML.replace("{n}", str(max_i)).replace("{frames}", json.dumps(frames))
+
+
+def geometry_view(sd: PlanarSubdivision) -> dict:
+    """Frontend-vriendelijke geometry: faces (polygonen + label) en deur-edges."""
+    faces = []
+    for fid in sd.bounded_faces():
+        faces.append(
+            {
+                "id": str(fid),
+                "label": sd.faces[fid].label or str(fid),
+                "points": sd.face_vertices(fid),
+            }
+        )
+    ext = sd.exterior_face()
+    doors = []
+    for he in sd.half_edges:
+        if he.kind != "door":
+            continue
+        if he.face == ext or sd.half_edges[he.twin].face == ext:
+            continue
+        a = sd.vertices[he.origin]
+        b = sd.vertices[sd.half_edges[he.next].origin]
+        doors.append({"x1": a.x, "y1": a.y, "x2": b.x, "y2": b.y})
+    return {"faces": faces, "doors": doors}
