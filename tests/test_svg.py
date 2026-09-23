@@ -2,8 +2,8 @@
 """Tests voor SVG-rendering en scrubpagina (plankit.svg)."""
 
 from plankit import ProgramEdge, ProgramSpace, RoomProgram
-from plankit.events import read_events, record
 from plankit.generate import generate
+from plankit.store import make_variant
 from plankit.svg import scrub_page, to_svg
 
 
@@ -24,13 +24,10 @@ def test_to_svg_contains_faces_and_door():
     assert "<line" in svg  # deur-edge
 
 
-def test_scrub_page_embeds_frames(tmp_path):
-    prog = _two_room()
-    sd = generate(prog)
-    log = str(tmp_path / "gen.jsonl")
-    record(log, 0, "generate", sd, prog)
-    events = read_events(log)
-    html = scrub_page(events)
+def test_scrub_page_embeds_frames():
+    sd = generate(_two_room())
+    v = make_variant(sd, _two_room(), step=0, label="generate")
+    html = scrub_page([v])
     assert "FRAMES" in html
     assert '"step": 0' in html
-    assert '"op": "generate"' in html
+    assert '"label": "generate"' in html

@@ -74,10 +74,10 @@ def main() -> None:
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "/tmp/plankit-demo"
     import os
 
-    from plankit import read_events, record
+    from plankit import VariantStore, make_variant
 
     os.makedirs(out_dir, exist_ok=True)
-    log = os.path.join(out_dir, "gen.jsonl")
+    store = VariantStore(os.path.join(out_dir, "variants.db"))
 
     for i, (name, (program, sd)) in enumerate(
         {"strip": strip_demo(), "grid": grid_demo()}.items()
@@ -87,14 +87,15 @@ def main() -> None:
         print(json.dumps(report, indent=2, ensure_ascii=False))
         with open(os.path.join(out_dir, f"{name}.svg"), "w", encoding="utf-8") as f:
             f.write(to_svg(sd))
-        record(log, i, name, sd, program)
+        store.add(make_variant(sd, program, step=i, label=name))
         print(f"SVG -> {out_dir}/{name}.svg")
         print()
 
-    events = read_events(log)
+    variants = store.all()
+    store.close()
     with open(os.path.join(out_dir, "index.html"), "w", encoding="utf-8") as f:
-        f.write(scrub_page(events))
-    print(f"scrubpagina -> {out_dir}/index.html ({len(events)} frames)")
+        f.write(scrub_page(variants))
+    print(f"scrubpagina -> {out_dir}/index.html ({len(variants)} frames)")
 
 
 if __name__ == "__main__":

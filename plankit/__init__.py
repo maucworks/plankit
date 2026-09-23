@@ -30,7 +30,7 @@ from plankit.conform import (
 )
 from plankit.constraints import Constraint, program_constraints
 from plankit.derive import door_pairs, perimeter_spaces, space_adjacency, space_footprints
-from plankit.events import Event, append_event, evaluate, read_events, record
+from plankit.events import evaluate
 from plankit.generate import generate, propose_layout
 from plankit.geometry import Vec
 from plankit.graph import Graph
@@ -45,6 +45,7 @@ from plankit.operators import (
 from plankit.planar import Face, HalfEdge, PlanarSubdivision, Vertex
 from plankit.program import EDGE_KINDS, SPACE_ROLES, ProgramEdge, ProgramSpace, RoomProgram
 from plankit.quality import aspect_ratios, circulation_depth, facade_lengths, is_enfilade
+from plankit.store import Variant, VariantStore, make_variant
 from plankit.svg import scrub_page, to_svg
 
 __all__ = [
@@ -91,11 +92,10 @@ __all__ = [
     "circulation_depth",
     "is_enfilade",
     # observatie
-    "Event",
-    "append_event",
-    "read_events",
     "evaluate",
-    "record",
+    "Variant",
+    "VariantStore",
+    "make_variant",
     "to_svg",
     "scrub_page",
     # analyse (space syntax)

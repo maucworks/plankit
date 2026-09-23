@@ -26,7 +26,7 @@ body{{font-family:system-ui,sans-serif;margin:1rem}}
 const FRAMES = {frames};
 function show(i){{
   const f = FRAMES[i];
-  document.getElementById("label").textContent = f.step + " — " + f.op;
+  document.getElementById("label").textContent = f.step + " — " + f.label;
   document.getElementById("frame").innerHTML = f.svg;
   document.getElementById("report").textContent = JSON.stringify(f.report, null, 2);
 }}
@@ -89,11 +89,18 @@ def to_svg(sd: PlanarSubdivision, width: int = 640, height: int = 480) -> str:
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">' + "".join(parts) + "</svg>"
 
 
-def scrub_page(events, width: int = 640, height: int = 480) -> str:
-    """Bouw een zelfstandige HTML-scrubpagina uit een lijst van events."""
+def scrub_page(variants, width: int = 640, height: int = 480) -> str:
+    """Bouw een zelfstandige HTML-scrubpagina uit een lijst van varianten."""
     frames = []
-    for ev in events:
-        sd = PlanarSubdivision.from_dict(ev.state)
-        frames.append({"step": ev.step, "op": ev.op, "svg": to_svg(sd, width, height), "report": ev.report})
+    for v in variants:
+        sd = PlanarSubdivision.from_dict(v.state)
+        frames.append(
+            {
+                "step": v.step,
+                "label": v.label or v.id[:8],
+                "svg": to_svg(sd, width, height),
+                "report": v.report,
+            }
+        )
     max_i = max(len(frames) - 1, 0)
     return _HTML.replace("{n}", str(max_i)).replace("{frames}", json.dumps(frames))
