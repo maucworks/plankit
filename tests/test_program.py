@@ -3,7 +3,7 @@
 
 import pytest
 
-from plankit import ProgramEdge, ProgramSpace, RoomProgram
+from plankit import ProgramEdge, ProgramSpace, RoomProgram, dwelling_budget
 
 
 def test_program_edge_rejects_unknown_kind():
@@ -85,6 +85,39 @@ def test_program_space_daylight_wet_defaults_false():
     space = ProgramSpace(name="X")
     assert space.daylight is False
     assert space.wet is False
+
+
+def test_program_space_group_core_roundtrip():
+    program = RoomProgram(
+        nodes={
+            "w": ProgramSpace(name="Woonkamer", group="A1"),
+            "kern": ProgramSpace(name="Kern", role="verkeer", core=True),
+        },
+        edges=[],
+    )
+    restored = RoomProgram.from_dict(program.to_dict())
+    assert restored.nodes["w"].group == "A1"
+    assert restored.nodes["kern"].core is True
+
+
+def test_program_space_group_core_defaults():
+    space = ProgramSpace(name="X")
+    assert space.group is None
+    assert space.core is False
+
+
+def test_dwelling_budget_ranges():
+    program = RoomProgram(
+        nodes={
+            "w": ProgramSpace(name="Woonkamer", area_min=15, group="A1"),
+            "k": ProgramSpace(name="Keuken", area_min=4, area_max=4.8, group="A1"),
+            "b": ProgramSpace(name="Badkamer", area_min=6, area_max=7.2, group="A1"),
+            "x": ProgramSpace(name="Ander", area_min=100, group="B1"),
+        },
+        edges=[],
+    )
+    assert dwelling_budget(program, "A1") == (25.0, 27.0)
+    assert dwelling_budget(program, "zzz") == (0.0, 0.0)
 
 
 def test_access_graph_only_door_edges():

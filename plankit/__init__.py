@@ -45,7 +45,14 @@ from plankit.operators import (
     split_footprint,
 )
 from plankit.planar import Face, HalfEdge, PlanarSubdivision, Vertex
-from plankit.program import EDGE_KINDS, SPACE_ROLES, ProgramEdge, ProgramSpace, RoomProgram
+from plankit.program import (
+    EDGE_KINDS,
+    SPACE_ROLES,
+    ProgramEdge,
+    ProgramSpace,
+    RoomProgram,
+    dwelling_budget,
+)
 from plankit.quality import (
     adjacency_gaps,
     aspect_ratios,
@@ -63,6 +70,7 @@ __all__ = [
     "RoomProgram",
     "ProgramSpace",
     "ProgramEdge",
+    "dwelling_budget",
     "EDGE_KINDS",
     "SPACE_ROLES",
     # geometrie

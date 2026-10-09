@@ -106,6 +106,36 @@ def test_check_program_two_entrances_separate_components_ok():
     assert not any("meerdere entrances" in i for i in issues)
 
 
+def test_check_program_two_entrances_same_dwelling():
+    prog = RoomProgram(
+        nodes={
+            "h1": ProgramSpace(name="Hal 1", entrance=True, group="A1"),
+            "h2": ProgramSpace(name="Hal 2", entrance=True, group="A1"),
+        },
+        edges=[ProgramEdge("h1", "h2", kind="door")],
+    )
+    issues = check_program(prog)
+    assert any("meerdere entrances" in i and "A1" in i for i in issues)
+
+
+def test_check_program_entrances_across_dwellings_ok():
+    prog = RoomProgram(
+        nodes={
+            "h1": ProgramSpace(name="Hal 1", entrance=True, group="A1"),
+            "k1": ProgramSpace(name="Keuken 1", group="A1"),
+            "h2": ProgramSpace(name="Hal 2", entrance=True, group="A2"),
+            "k2": ProgramSpace(name="Keuken 2", group="A2"),
+        },
+        edges=[
+            ProgramEdge("h1", "k1", kind="door"),
+            ProgramEdge("h2", "k2", kind="door"),
+            ProgramEdge("k1", "k2", kind="wall"),
+        ],
+    )
+    issues = check_program(prog)
+    assert not any("meerdere entrances" in i for i in issues)
+
+
 def test_validate_circulation_starts_at_entrance():
     prog = RoomProgram(
         nodes={

@@ -125,7 +125,7 @@ def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
 
 def check_program(program: RoomProgram) -> list[str]:
     """Statische controles op een PvE-graaf: onbekende refs, geïsoleerde knopen
-    en meerdere entrances per samenhangscomponente."""
+    en meerdere entrances per woninggroep (of per component zonder groep)."""
     issues: list[str] = []
     keys = set(program.nodes)
     for edge in program.edges:
@@ -143,10 +143,20 @@ def check_program(program: RoomProgram) -> list[str]:
     for key in keys:
         if g.degree(key) == 0:
             issues.append(f"geïsoleerde knoop {key!r}")
-    for comp in g.connected_components():
-        entrances = sorted(key for key in comp if program.nodes[key].entrance)
-        if len(entrances) > 1:
-            issues.append(f"meerdere entrances in één component: {', '.join(entrances)}")
+    for ci, comp in enumerate(g.connected_components()):
+        buckets: dict[tuple[str, str], list[str]] = {}
+        for key in comp:
+            if not program.nodes[key].entrance:
+                continue
+            group = program.nodes[key].group
+            bucket = ("woning", group) if group is not None else ("component", str(ci))
+            buckets.setdefault(bucket, []).append(key)
+        for (kind, name), entrances in buckets.items():
+            if len(entrances) > 1:
+                where = f"woning {name!r}" if kind == "woning" else "één component"
+                issues.append(
+                    f"meerdere entrances in {where}: {', '.join(sorted(entrances))}"
+                )
     return issues
 
 

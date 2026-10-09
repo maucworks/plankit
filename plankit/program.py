@@ -44,6 +44,10 @@ class ProgramSpace:
             compositie-rand (zie :func:`plankit.operators.propose_magnet`).
         wet: ``True`` = natte cel; plaatsingsdriver bij andere natte cellen
             (zie :func:`plankit.operators.propose_magnet`).
+        group: Woningcode (bv. ``"A1"``); ``None`` = geen groep. Entrances
+            worden per groep getoetst (zie :func:`plankit.conform.check_program`).
+        core: ``True`` = ontsluitingskern (lift/vluchttrap-typering volgt later
+            als subtype).
     """
 
     name: str = ""
@@ -56,6 +60,8 @@ class ProgramSpace:
     entrance: bool = False
     daylight: bool = False
     wet: bool = False
+    group: str | None = None
+    core: bool = False
 
     def __post_init__(self) -> None:
         if self.role not in SPACE_ROLES:
@@ -124,3 +130,18 @@ class RoomProgram:
             if edge.kind == "door":
                 graph.add_edge(edge.a, edge.b, kind="door")
         return graph
+
+
+def dwelling_budget(program: "RoomProgram", group: str) -> tuple[float, float]:
+    """Bruto-range van een woninggroep: som kamer-minima en -maxima.
+
+    Kamers zonder ``area_max`` tellen met ``area_min`` mee. Onbekende groep
+    geeft ``(0.0, 0.0)``.
+    """
+    lo, hi = 0.0, 0.0
+    for space in program.nodes.values():
+        if space.group != group:
+            continue
+        lo += space.area_min or 0.0
+        hi += space.area_max if space.area_max is not None else space.area_min or 0.0
+    return (lo, hi)
