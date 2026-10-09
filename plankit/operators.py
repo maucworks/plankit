@@ -29,6 +29,28 @@ def _rect_points(x0: float, y0: float, x1: float, y1: float) -> list[Vec]:
     return [Vec(x0, y0), Vec(x1, y0), Vec(x1, y1), Vec(x0, y1)]
 
 
+def shape_for_area(
+    area: float, max_aspect: float = 1.5, landscape: bool | None = None
+) -> tuple[float, float]:
+    """Kies (w, d) voor *area* binnen een aspect-cap (MFP-factorparen).
+
+    Geeft `w * d == area` (op float-epsilon na) met
+    `max(w, d) / min(w, d) <= max_aspect`. Deterministisch: `landscape=True`
+    (default) geeft `w >= d`, `landscape=False` geeft `d > w`.
+    """
+    if area <= 0:
+        raise ValueError(f"shape_for_area: area moet positief zijn, got {area!r}")
+    if max_aspect < 1:
+        raise ValueError(f"shape_for_area: max_aspect moet >= 1 zijn, got {max_aspect!r}")
+    if landscape is None:
+        landscape = True
+    w = math.sqrt(area * max_aspect)
+    d = area / w
+    if not landscape:
+        w, d = d, w
+    return (w, d)
+
+
 def place_space(
     program: RoomProgram,
     key: str,
@@ -36,11 +58,13 @@ def place_space(
     y0: float,
     w: float | None = None,
     d: float | None = None,
+    max_aspect: float = 1.5,
 ) -> list[Vec]:
     """Plaats ruimte *key* als rechthoek met oorsprong (x0, y0).
 
     Afmetingen honoreren ``area_min``/``area_max``: geef beide, of één (de
-    ander volgt uit ``area_min``), of geen (vierkant uit ``area_min``).
+    ander volgt uit ``area_min``), of geen (vorm uit :func:`shape_for_area`
+    binnen ``max_aspect``).
     """
     if key not in program.nodes:
         raise KeyError(f"place_space: onbekende knoop {key!r}")
@@ -66,7 +90,7 @@ def place_space(
             raise ValueError(f"place_space: d moet positief zijn, got {d!r}")
         w = lo / d
     else:
-        w = d = math.sqrt(lo)
+        w, d = shape_for_area(lo, max_aspect)
     return _rect_points(x0, y0, x0 + w, y0 + d)
 
 
@@ -125,11 +149,12 @@ def layout_row(
     y0: float,
     depth: float,
     gap: float = 0.0,
+    max_aspect: float = 1.5,
 ) -> dict[str, list[Vec]]:
     """Leg ruimten naast elkaar in een rij met vaste diepte.
 
     Elke ruimte krijgt breedte ``area_min / depth``. Deterministisch;
-    samengesteld uit :func:`place_space`.
+    samengesteld uit :func:`place_space` (``max_aspect`` wordt doorgegeven).
     """
     if depth <= 0:
         raise ValueError(f"layout_row: depth moet positief zijn, got {depth!r}")
@@ -142,6 +167,6 @@ def layout_row(
         if space.area_min is None:
             raise ValueError(f"layout_row: {key!r} heeft geen area_min")
         w = space.area_min / depth
-        out[key] = place_space(program, key, x, y0, w=w, d=depth)
+        out[key] = place_space(program, key, x, y0, w=w, d=depth, max_aspect=max_aspect)
         x += w + gap
     return out

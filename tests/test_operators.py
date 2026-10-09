@@ -11,6 +11,7 @@ from plankit.operators import (
     mirror_footprint,
     place_space,
     remove_room,
+    shape_for_area,
     split_footprint,
 )
 
@@ -125,3 +126,39 @@ def test_layout_row():
         layout_row(prog, ["zzz"], 0, 0, 4.0)
     with pytest.raises(ValueError):
         layout_row(prog, ["k"], 0, 0, 0.0)
+
+
+def test_shape_for_area_respects_cap_and_area():
+    for area in [1.0, 2.0, 5.0, 8.0, 20.0, 100.0, 200.0]:
+        w, d = shape_for_area(area, max_aspect=1.5)
+        assert w * d == pytest.approx(area)
+        assert max(w, d) / min(w, d) <= 1.5 + 1e-9
+
+
+def test_shape_for_area_landscape():
+    w, d = shape_for_area(20.0)
+    assert w >= d
+    w2, d2 = shape_for_area(20.0, landscape=False)
+    assert d2 > w2
+    assert (w, d) == (d2, w2)
+
+
+def test_shape_for_area_deterministic():
+    assert shape_for_area(13.0) == shape_for_area(13.0)
+
+
+def test_shape_for_area_rejects_bad_input():
+    with pytest.raises(ValueError):
+        shape_for_area(0.0)
+    with pytest.raises(ValueError):
+        shape_for_area(-5.0)
+    with pytest.raises(ValueError):
+        shape_for_area(10.0, max_aspect=0.5)
+
+
+def test_place_space_fallback_uses_shape():
+    pts = place_space(_program(), "k", 0, 0)
+    xs = [p.x for p in pts]
+    ys = [p.y for p in pts]
+    w, d = max(xs) - min(xs), max(ys) - min(ys)
+    assert max(w, d) / min(w, d) <= 1.5 + 1e-9
