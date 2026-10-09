@@ -115,7 +115,8 @@ def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
 
 
 def check_program(program: RoomProgram) -> list[str]:
-    """Statische controles op een PvE-graaf: onbekende refs en geïsoleerde knopen."""
+    """Statische controles op een PvE-graaf: onbekende refs, geïsoleerde knopen
+    en meerdere entrances per samenhangscomponente."""
     issues: list[str] = []
     keys = set(program.nodes)
     for edge in program.edges:
@@ -128,11 +129,15 @@ def check_program(program: RoomProgram) -> list[str]:
     for key in keys:
         g.add_node(key)
     for edge in program.edges:
-        if edge.kind != "forbidden":
+        if edge.kind != "forbidden" and edge.a in keys and edge.b in keys:
             g.add_edge(edge.a, edge.b)
     for key in keys:
         if g.degree(key) == 0:
             issues.append(f"geïsoleerde knoop {key!r}")
+    for comp in g.connected_components():
+        entrances = sorted(key for key in comp if program.nodes[key].entrance)
+        if len(entrances) > 1:
+            issues.append(f"meerdere entrances in één component: {', '.join(entrances)}")
     return issues
 
 
@@ -152,6 +157,9 @@ class CirculationReport:
 
 
 def _default_root(program: RoomProgram) -> str | None:
+    for key, space in program.nodes.items():
+        if space.entrance:
+            return key
     for key, space in program.nodes.items():
         if space.exterior:
             return key

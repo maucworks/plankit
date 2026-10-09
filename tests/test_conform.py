@@ -77,6 +77,48 @@ def test_validate_circulation_reachable():
     assert not r.unreachable
 
 
+def test_check_program_two_entrances_one_component():
+    prog = RoomProgram(
+        nodes={
+            "h1": ProgramSpace(name="Hal 1", entrance=True),
+            "h2": ProgramSpace(name="Hal 2", entrance=True),
+        },
+        edges=[ProgramEdge("h1", "h2", kind="door")],
+    )
+    issues = check_program(prog)
+    assert any("meerdere entrances" in i and "h1" in i and "h2" in i for i in issues)
+
+
+def test_check_program_two_entrances_separate_components_ok():
+    prog = RoomProgram(
+        nodes={
+            "h1": ProgramSpace(name="Hal 1", entrance=True),
+            "k1": ProgramSpace(name="Keuken 1"),
+            "h2": ProgramSpace(name="Hal 2", entrance=True),
+            "k2": ProgramSpace(name="Keuken 2"),
+        },
+        edges=[
+            ProgramEdge("h1", "k1", kind="door"),
+            ProgramEdge("h2", "k2", kind="door"),
+        ],
+    )
+    issues = check_program(prog)
+    assert not any("meerdere entrances" in i for i in issues)
+
+
+def test_validate_circulation_starts_at_entrance():
+    prog = RoomProgram(
+        nodes={
+            "h": ProgramSpace(name="Hal", entrance=True),
+            "k": ProgramSpace(name="Keuken"),
+        },
+        edges=[ProgramEdge("h", "k", kind="door")],
+    )
+    r = validate_circulation(prog)
+    assert r.root == "h"
+    assert r.ok
+
+
 def test_validate_circulation_unreachable():
     prog = RoomProgram(
         nodes={

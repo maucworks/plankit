@@ -48,6 +48,29 @@ def test_program_space_role_roundtrip():
     assert restored.nodes["g"].role == "verkeer"
 
 
+def test_program_space_entrance_roundtrip():
+    program = RoomProgram(nodes={"h": ProgramSpace(name="Hal", entrance=True)}, edges=[])
+    restored = RoomProgram.from_dict(program.to_dict())
+    assert restored.nodes["h"].entrance is True
+
+
+def test_program_space_entrance_defaults_false():
+    assert ProgramSpace(name="X").entrance is False
+
+
+def test_program_edge_max_distance_roundtrip():
+    program = RoomProgram(
+        nodes={"a": ProgramSpace(name="A"), "b": ProgramSpace(name="B")},
+        edges=[ProgramEdge("a", "b", kind="wall", required=False, max_distance=3.0)],
+    )
+    restored = RoomProgram.from_dict(program.to_dict())
+    assert restored.edges[0].max_distance == 3.0
+
+
+def test_program_edge_max_distance_defaults_none():
+    assert ProgramEdge("a", "b", kind="wall").max_distance is None
+
+
 def test_access_graph_only_door_edges():
     program = RoomProgram(
         nodes={
