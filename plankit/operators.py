@@ -220,6 +220,8 @@ def propose_magnet(
     seed: int = 0,
     max_aspect: float = 1.5,
     partner_bonus: float = 2.0,
+    wet_bonus: float = 1.5,
+    daylight_bonus: float = 1.0,
 ) -> dict[str, list[Vec]]:
     """Greedy compositie: kamers magnetiseren tegen elkaar (MFP-volgorde+score).
 
@@ -227,7 +229,10 @@ def propose_magnet(
     geplaatste adjacentie-buren (`door`/`wall`; seeded jitter als tie-break).
     Elke kamer krijgt een vorm uit :func:`shape_for_area` (oriëntatie seeded)
     en de overlap-vrije positie met de meeste gedeelde wand (partners tellen
-    ``partner_bonus`` keer). Deterministisch bij gelijke *seed*.
+    ``partner_bonus`` keer). Natte cellen (`wet`) clusteren via ``wet_bonus``
+    (additief); daglicht-kamers (`daylight`) scoren ``daylight_bonus`` per
+    meter niet-rakende wand (blootgestelde perimeter — geen outline nodig).
+    Deterministisch bij gelijke *seed*.
     """
     keys = [k for k in program.nodes if not program.nodes[k].exterior]
     for key in keys:
@@ -238,6 +243,7 @@ def propose_magnet(
         if edge.kind in ("door", "wall") and edge.a in partners and edge.b in partners:
             partners[edge.a].add(edge.b)
             partners[edge.b].add(edge.a)
+    wet_rooms = {k for k in keys if program.nodes[k].wet}
     rng = random.Random(seed)
     order: list[str] = []
     remaining = list(keys)
@@ -272,11 +278,19 @@ def propose_magnet(
                     cand = (ox, oy, ox + w, oy + h)
                     if any(_rects_overlap(cand, r) for r in rects.values()):
                         continue
-                    score = sum(
-                        _shared_wall(cand, orect)
-                        * (partner_bonus if okey in partners[key] else 1.0)
-                        for okey, orect in rects.items()
-                    )
+                    shared_total = 0.0
+                    score = 0.0
+                    for okey, orect in rects.items():
+                        shared = _shared_wall(cand, orect)
+                        shared_total += shared
+                        if okey in partners[key]:
+                            score += shared * partner_bonus
+                        else:
+                            score += shared
+                        if key in wet_rooms and okey in wet_rooms:
+                            score += shared * wet_bonus
+                    if program.nodes[key].daylight:
+                        score += (2 * (w + h) - shared_total) * daylight_bonus
                     if score > best_score:
                         best_score = score
                         best_rect = cand

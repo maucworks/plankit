@@ -40,6 +40,10 @@ class ProgramSpace:
             ruimte (verkeersruimte telt in GO, niet in NVO).
         entrance: ``True`` = entree van het gebouw(deel); maximaal één per
             samenhangscomponente (zie :func:`plankit.conform.check_program`).
+        daylight: ``True`` = daglicht nodig; plaatsingsdriver naar de
+            compositie-rand (zie :func:`plankit.operators.propose_magnet`).
+        wet: ``True`` = natte cel; plaatsingsdriver bij andere natte cellen
+            (zie :func:`plankit.operators.propose_magnet`).
     """
 
     name: str = ""
@@ -50,6 +54,8 @@ class ProgramSpace:
     exterior: bool = False
     role: str = "verblijf"
     entrance: bool = False
+    daylight: bool = False
+    wet: bool = False
 
     def __post_init__(self) -> None:
         if self.role not in SPACE_ROLES:

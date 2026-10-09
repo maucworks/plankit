@@ -241,3 +241,51 @@ def test_propose_magnet_requires_area():
     prog = RoomProgram(nodes={"x": ProgramSpace(name="X")}, edges=[])
     with pytest.raises(ValueError):
         propose_magnet(prog)
+
+
+def test_propose_magnet_wet_rooms_cluster():
+    prog = RoomProgram(
+        nodes={
+            "w": ProgramSpace(name="Woonkamer", area_min=20),
+            "b": ProgramSpace(name="Badkamer", area_min=6, wet=True),
+            "t": ProgramSpace(name="Toilet", area_min=4, wet=True),
+        },
+        edges=[ProgramEdge("w", "b", kind="door")],  # b-t: geen expliciete kant
+    )
+    out = propose_magnet(prog, seed=0)
+    boxes = {k: _bbox(v) for k, v in out.items()}
+    assert _shared_wall_len(boxes["b"], boxes["t"]) > 0
+
+
+def test_propose_magnet_daylight_touches_edge():
+    prog = RoomProgram(
+        nodes={
+            "w": ProgramSpace(name="Woonkamer", area_min=20, daylight=True),
+            "b": ProgramSpace(name="Badkamer", area_min=6),
+            "s": ProgramSpace(name="Slaapkamer", area_min=12),
+        },
+        edges=[
+            ProgramEdge("w", "b", kind="door"),
+            ProgramEdge("b", "s", kind="door"),
+        ],
+    )
+    out = propose_magnet(prog, seed=0)
+    boxes = {k: _bbox(v) for k, v in out.items()}
+    gx0 = min(b[0] for b in boxes.values())
+    gy0 = min(b[1] for b in boxes.values())
+    gx1 = max(b[2] for b in boxes.values())
+    gy1 = max(b[3] for b in boxes.values())
+    w = boxes["w"]
+    assert w[0] == gx0 or w[1] == gy0 or w[2] == gx1 or w[3] == gy1
+
+
+def test_propose_magnet_flags_keep_determinism():
+    prog = RoomProgram(
+        nodes={"w": ProgramSpace(name="W", area_min=20, daylight=True, wet=True)},
+        edges=[],
+    )
+    a = propose_magnet(prog, seed=2)
+    b = propose_magnet(prog, seed=2)
+    assert {k: [(p.x, p.y) for p in v] for k, v in a.items()} == {
+        k: [(p.x, p.y) for p in v] for k, v in b.items()
+    }

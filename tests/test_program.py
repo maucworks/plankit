@@ -71,6 +71,22 @@ def test_program_edge_max_distance_defaults_none():
     assert ProgramEdge("a", "b", kind="wall").max_distance is None
 
 
+def test_program_space_daylight_wet_roundtrip():
+    program = RoomProgram(
+        nodes={"b": ProgramSpace(name="Bad", wet=True, daylight=False)},
+        edges=[],
+    )
+    restored = RoomProgram.from_dict(program.to_dict())
+    assert restored.nodes["b"].wet is True
+    assert restored.nodes["b"].daylight is False
+
+
+def test_program_space_daylight_wet_defaults_false():
+    space = ProgramSpace(name="X")
+    assert space.daylight is False
+    assert space.wet is False
+
+
 def test_access_graph_only_door_edges():
     program = RoomProgram(
         nodes={
