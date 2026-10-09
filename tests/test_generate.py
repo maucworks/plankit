@@ -72,6 +72,36 @@ def test_generate_unknown_strategy():
         generate(_two_room_program(), strategy="nonsense")
 
 
+def test_generate_skips_door_without_shared_edge():
+    from plankit.conform import conform
+
+    proposal = {
+        "k": [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)],
+        "w": [(10.0, 0.0), (15.0, 0.0), (15.0, 4.0), (10.0, 4.0)],
+    }
+    sd = generate(_two_room_program(), proposal=proposal)  # geen crash
+    r = conform(sd, _two_room_program())
+    assert not r.ok
+    assert "edge:k-w:door" in r.violated
+    assert r.missing_adj == {"k": ["w"], "w": ["k"]}
+
+
+def test_generate_magnet_labels_match_areas():
+    # keten-5/seed-0 legde r2 op een 0 m²-splinter (noding-artefact); labels
+    # moeten naar de grootste face binnen de proposal-bbox.
+    from plankit.operators import propose_magnet
+
+    prog = RoomProgram(
+        nodes={f"r{i}": ProgramSpace(name=f"R{i}", area_min=a) for i, a in enumerate([6.0, 10.0, 14.0, 20.0, 28.0])},
+        edges=[ProgramEdge(f"r{i}", f"r{i + 1}", kind="door") for i in range(4)],
+    )
+    sd = generate(prog, proposal=propose_magnet(prog, seed=0))
+    got = {f.label: sd.face_area(i) for i, f in enumerate(sd.faces) if not f.exterior and f.label}
+    assert set(got) == {"r0", "r1", "r2", "r3", "r4"}
+    for key, space in prog.nodes.items():
+        assert got[key] == pytest.approx(space.area_min)
+
+
 def test_program_constraints():
     cs = program_constraints(_two_room_program())
     kinds = sorted(c.kind for c in cs)

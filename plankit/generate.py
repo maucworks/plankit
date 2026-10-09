@@ -42,7 +42,8 @@ def generate(
     ``proposal`` is ``{room_key: [punten...]}`` (rechthoeken). Zonder proposal
     bepaalt ``strategy`` het voorstel: ``"row"`` (strip, default) of
     ``"magnet"`` (contact-gedreven compositie). ``door``-kanten uit het PvE
-    worden op de gedeelde edges gemarkeerd.
+    worden op de gedeelde edges gemarkeerd; paren zonder gedeelde edge worden
+    overgeslagen (zie :func:`plankit.conform.conform` voor rapportage).
     """
     if proposal is None:
         if strategy == "magnet":
@@ -60,7 +61,11 @@ def generate(
     sd = PlanarSubdivision.from_centerlines(segments)
 
     face_by_room: dict[str, int] = {}
+    best: dict[str, tuple[float, int]] = {}
     for fid in sd.bounded_faces():
+        area = sd.face_area(fid)
+        if area <= _EPS:
+            continue  # splinter-face uit de noding krijgt geen label
         pts = sd.face_vertices(fid)
         cx = sum(p[0] for p in pts) / len(pts)
         cy = sum(p[1] for p in pts) / len(pts)
@@ -68,8 +73,10 @@ def generate(
             xs = [_xy(p)[0] for p in rect]
             ys = [_xy(p)[1] for p in rect]
             if min(xs) - _EPS < cx < max(xs) + _EPS and min(ys) - _EPS < cy < max(ys) + _EPS:
-                face_by_room[key] = fid
+                if key not in best or area > best[key][0]:
+                    best[key] = (area, fid)
                 break
+    face_by_room = {key: fid for key, (_, fid) in best.items()}
 
     for key, fid in face_by_room.items():
         sd.faces[fid].label = key
@@ -79,6 +86,6 @@ def generate(
             continue
         fa = face_by_room.get(edge.a)
         fb = face_by_room.get(edge.b)
-        if fa is not None and fb is not None:
+        if fa is not None and fb is not None and sd.shared_edge(fa, fb) is not None:
             sd.mark_edge(fa, fb, "door")
     return sd
