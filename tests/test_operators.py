@@ -10,6 +10,7 @@ from plankit.operators import (
     layout_row,
     mirror_footprint,
     place_space,
+    propose_magnet,
     remove_room,
     shape_for_area,
     split_footprint,
@@ -162,3 +163,81 @@ def test_place_space_fallback_uses_shape():
     ys = [p.y for p in pts]
     w, d = max(xs) - min(xs), max(ys) - min(ys)
     assert max(w, d) / min(w, d) <= 1.5 + 1e-9
+
+
+def _bbox(pts) -> tuple:
+    xs = [p.x for p in pts]
+    ys = [p.y for p in pts]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _magnet_program() -> RoomProgram:
+    return RoomProgram(
+        nodes={
+            "h": ProgramSpace(name="Hal", area_min=6, entrance=True),
+            "k": ProgramSpace(name="Keuken", area_min=8),
+            "w": ProgramSpace(name="Woonkamer", area_min=20),
+        },
+        edges=[
+            ProgramEdge("h", "k", kind="door"),
+            ProgramEdge("k", "w", kind="door"),
+        ],
+    )
+
+
+def test_propose_magnet_deterministic():
+    prog = _magnet_program()
+    a = propose_magnet(prog, seed=3)
+    b = propose_magnet(prog, seed=3)
+    assert {k: [(p.x, p.y) for p in v] for k, v in a.items()} == {
+        k: [(p.x, p.y) for p in v] for k, v in b.items()
+    }
+
+
+def test_propose_magnet_places_all_without_overlap():
+    prog = _magnet_program()
+    out = propose_magnet(prog, seed=1)
+    assert set(out) == {"h", "k", "w"}
+    boxes = {k: _bbox(v) for k, v in out.items()}
+    for key, box in boxes.items():
+        assert (box[2] - box[0]) * (box[3] - box[1]) == pytest.approx(
+            prog.nodes[key].area_min
+        )
+    keys = list(boxes)
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a, b = boxes[keys[i]], boxes[keys[j]]
+            assert not (
+                a[0] < b[2] - 1e-9
+                and b[0] < a[2] - 1e-9
+                and a[1] < b[3] - 1e-9
+                and b[1] < a[3] - 1e-9
+            )
+
+
+def _shared_wall_len(a: tuple, b: tuple) -> float:
+    total = 0.0
+    if abs(a[2] - b[0]) <= 1e-9 or abs(b[2] - a[0]) <= 1e-9:
+        total += max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    if abs(a[3] - b[1]) <= 1e-9 or abs(b[3] - a[1]) <= 1e-9:
+        total += max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    return total
+
+
+def test_propose_magnet_partners_share_wall():
+    prog = _magnet_program()
+    out = propose_magnet(prog, seed=1)
+    boxes = {k: _bbox(v) for k, v in out.items()}
+    assert _shared_wall_len(boxes["h"], boxes["k"]) > 0
+    assert _shared_wall_len(boxes["k"], boxes["w"]) > 0
+
+
+def test_propose_magnet_entrance_first_at_origin():
+    out = propose_magnet(_magnet_program(), seed=1)
+    assert _bbox(out["h"])[:2] == pytest.approx((0.0, 0.0))
+
+
+def test_propose_magnet_requires_area():
+    prog = RoomProgram(nodes={"x": ProgramSpace(name="X")}, edges=[])
+    with pytest.raises(ValueError):
+        propose_magnet(prog)

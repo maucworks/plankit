@@ -54,6 +54,24 @@ def test_propose_layout_deterministic():
     assert propose_layout(prog) == propose_layout(prog)
 
 
+def test_generate_magnet_strategy():
+    sd = generate(_two_room_program(), strategy="magnet")
+    ids = {f.label: str(i) for i, f in enumerate(sd.faces) if not f.exterior}
+    assert {"k", "w"} <= set(ids)
+    pairs = door_pairs(sd)
+    assert (ids["k"], ids["w"]) in pairs or (ids["w"], ids["k"]) in pairs
+
+
+def test_generate_default_strategy_still_row():
+    sd = generate(_two_room_program())
+    assert door_pairs(sd) == [("0", "1")]
+
+
+def test_generate_unknown_strategy():
+    with pytest.raises(ValueError):
+        generate(_two_room_program(), strategy="nonsense")
+
+
 def test_program_constraints():
     cs = program_constraints(_two_room_program())
     kinds = sorted(c.kind for c in cs)

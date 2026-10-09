@@ -9,7 +9,7 @@ verkeersstrategie) met dezelfde interface.
 
 from __future__ import annotations
 
-from plankit.operators import layout_row
+from plankit.operators import layout_row, propose_magnet
 from plankit.planar import PlanarSubdivision
 from plankit.program import RoomProgram
 
@@ -26,21 +26,31 @@ def propose_layout(program: RoomProgram, depth: float = 4.0) -> dict:
     """Coarse stub: leg niet-exterieure ruimten in een strip.
 
     Bepaalt per ruimte een rechthoek op basis van ``area_min``. Dit is de plek
-    waar een echte LLM zijn nabuurschap-/verkeersstrategie kwijt kan.
+    waar een echte LLM zijn nabuurschap-/verkeersstrategie kwijt kan; zie ook
+    :func:`plankit.operators.propose_magnet` voor een deterministische
+    contact-gedreven strategie.
     """
     keys = [k for k in program.nodes if not program.nodes[k].exterior]
     return layout_row(program, keys, x0=0.0, y0=0.0, depth=depth, gap=0.0)
 
 
-def generate(program: RoomProgram, proposal: dict | None = None) -> PlanarSubdivision:
+def generate(
+    program: RoomProgram, proposal: dict | None = None, strategy: str = "row"
+) -> PlanarSubdivision:
     """Bouw het skelet uit het PvE.
 
     ``proposal`` is ``{room_key: [punten...]}`` (rechthoeken). Zonder proposal
-    wordt :func:`propose_layout` gebruikt. ``door``-kanten uit het PvE worden op
-    de gedeelde edges gemarkeerd.
+    bepaalt ``strategy`` het voorstel: ``"row"`` (strip, default) of
+    ``"magnet"`` (contact-gedreven compositie). ``door``-kanten uit het PvE
+    worden op de gedeelde edges gemarkeerd.
     """
     if proposal is None:
-        proposal = propose_layout(program)
+        if strategy == "magnet":
+            proposal = propose_magnet(program)
+        elif strategy == "row":
+            proposal = propose_layout(program)
+        else:
+            raise ValueError(f"generate: onbekende strategy {strategy!r}")
 
     segments = []
     for pts in proposal.values():

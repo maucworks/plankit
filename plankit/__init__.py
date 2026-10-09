@@ -39,7 +39,9 @@ from plankit.operators import (
     layout_row,
     mirror_footprint,
     place_space,
+    propose_magnet,
     remove_room,
+    shape_for_area,
     split_footprint,
 )
 from plankit.planar import Face, HalfEdge, PlanarSubdivision, Vertex
@@ -71,7 +73,9 @@ __all__ = [
     # generatie
     "generate",
     "propose_layout",
+    "propose_magnet",
     "place_space",
+    "shape_for_area",
     "split_footprint",
     "mirror_footprint",
     "add_room",

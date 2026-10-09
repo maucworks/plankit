@@ -8,6 +8,7 @@ Alles is deterministisch en zonder optionele dependencies.
 from __future__ import annotations
 
 import math
+import random
 
 from plankit.geometry import Vec
 from plankit.program import ProgramSpace, RoomProgram
@@ -169,4 +170,120 @@ def layout_row(
         w = space.area_min / depth
         out[key] = place_space(program, key, x, y0, w=w, d=depth, max_aspect=max_aspect)
         x += w + gap
+    return out
+
+
+def _rects_overlap(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> bool:
+    """True als interieurs overlappen (raken mag)."""
+    return (
+        a[0] < b[2] - _TOL
+        and b[0] < a[2] - _TOL
+        and a[1] < b[3] - _TOL
+        and b[1] < a[3] - _TOL
+    )
+
+
+def _shared_wall(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> float:
+    """Gedeelde wandlengte van twee as-uitgelijnde rechthoeken."""
+    total = 0.0
+    if abs(a[2] - b[0]) <= _TOL or abs(b[2] - a[0]) <= _TOL:
+        total += max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    if abs(a[3] - b[1]) <= _TOL or abs(b[3] - a[1]) <= _TOL:
+        total += max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    return total
+
+
+def _anchors(
+    rect: tuple[float, float, float, float], w: float, h: float
+) -> list[tuple[float, float]]:
+    """Kandidaat-oorsprongen: nieuwe rect (w, h) vlak tegen elke zijde van
+    *rect*, telkens uitgelijnd op beide hoeken."""
+    x0, y0, x1, y1 = rect
+    return [
+        (x1, y0),
+        (x1, y1 - h),
+        (x0 - w, y0),
+        (x0 - w, y1 - h),
+        (x0, y1),
+        (x1 - w, y1),
+        (x0, y0 - h),
+        (x1 - w, y0 - h),
+    ]
+
+
+def propose_magnet(
+    program: RoomProgram,
+    seed: int = 0,
+    max_aspect: float = 1.5,
+    partner_bonus: float = 2.0,
+) -> dict[str, list[Vec]]:
+    """Greedy compositie: kamers magnetiseren tegen elkaar (MFP-volgorde+score).
+
+    Plaatsvolgorde: entrance eerst, daarna de kamer met de meeste reeds
+    geplaatste adjacentie-buren (`door`/`wall`; seeded jitter als tie-break).
+    Elke kamer krijgt een vorm uit :func:`shape_for_area` (oriëntatie seeded)
+    en de overlap-vrije positie met de meeste gedeelde wand (partners tellen
+    ``partner_bonus`` keer). Deterministisch bij gelijke *seed*.
+    """
+    keys = [k for k in program.nodes if not program.nodes[k].exterior]
+    for key in keys:
+        if program.nodes[key].area_min is None:
+            raise ValueError(f"propose_magnet: {key!r} heeft geen area_min")
+    partners: dict[str, set[str]] = {k: set() for k in keys}
+    for edge in program.edges:
+        if edge.kind in ("door", "wall") and edge.a in partners and edge.b in partners:
+            partners[edge.a].add(edge.b)
+            partners[edge.b].add(edge.a)
+    rng = random.Random(seed)
+    order: list[str] = []
+    remaining = list(keys)
+    for key in remaining:
+        if program.nodes[key].entrance:
+            order.append(key)
+            break
+    for key in order:
+        remaining.remove(key)
+    while remaining:
+        placed = set(order)
+        scored = [
+            (len(partners[key] & placed) + rng.random() * 0.05, key) for key in remaining
+        ]
+        scored.sort()
+        best = scored[-1][1]
+        order.append(best)
+        remaining.remove(best)
+    rects: dict[str, tuple[float, float, float, float]] = {}
+    out: dict[str, list[Vec]] = {}
+    for key in order:
+        w, h = shape_for_area(
+            program.nodes[key].area_min, max_aspect, landscape=rng.random() < 0.5
+        )
+        if not rects:
+            rect = (0.0, 0.0, w, h)
+        else:
+            best_rect: tuple[float, float, float, float] | None = None
+            best_score = -1.0
+            for other in rects.values():
+                for ox, oy in _anchors(other, w, h):
+                    cand = (ox, oy, ox + w, oy + h)
+                    if any(_rects_overlap(cand, r) for r in rects.values()):
+                        continue
+                    score = sum(
+                        _shared_wall(cand, orect)
+                        * (partner_bonus if okey in partners[key] else 1.0)
+                        for okey, orect in rects.items()
+                    )
+                    if score > best_score:
+                        best_score = score
+                        best_rect = cand
+            if best_rect is None:  # volgebouwd: rechts van de bbox plakken
+                x = max(r[2] for r in rects.values())
+                best_rect = (x, 0.0, x + w, h)
+            rect = best_rect
+        rects[key] = rect
+        out[key] = _rect_points(*rect)
     return out
