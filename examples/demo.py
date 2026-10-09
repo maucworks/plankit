@@ -1,7 +1,7 @@
 # This file was generated with the assistance of an AI coding tool.
 """Demo: laat plankit end-to-end werken (PvE → skelet → rapport → SVG).
 
-Draait twee voorbeelden en schrijft per voorbeeld een SVG-plattegrond, een
+Draait drie voorbeelden en schrijft per voorbeeld een SVG-plattegrond, een
 conformance/kwaliteit-rapport en een scrubpagina.
 
 Gebruik:  PYTHONPATH=. python3 examples/demo.py [uitvoermap]
@@ -70,6 +70,29 @@ def grid_demo() -> tuple[RoomProgram, str]:
     return program, sd
 
 
+def magnet_demo() -> tuple[RoomProgram, str]:
+    """Magnet-compositie: entrance-hal, daglicht-woonkamer, natte cellen bijeen."""
+    program = RoomProgram(
+        nodes={
+            "h": ProgramSpace(name="0.01", long_name="Hal", area_min=6, role="verkeer", entrance=True),
+            "w": ProgramSpace(name="1.01", long_name="Woonkamer", area_min=20, daylight=True),
+            "k": ProgramSpace(name="1.02", long_name="Keuken", area_min=8),
+            "b": ProgramSpace(name="2.01", long_name="Badkamer", area_min=5, wet=True),
+            "t": ProgramSpace(name="2.02", long_name="Toilet", area_min=3, wet=True),
+            "buiten": ProgramSpace(name="buiten", exterior=True),
+        },
+        edges=[
+            ProgramEdge("h", "w", kind="door"),
+            ProgramEdge("h", "k", kind="door"),
+            ProgramEdge("k", "b", kind="door"),
+            ProgramEdge("w", "buiten", kind="facade"),
+            ProgramEdge("k", "buiten", kind="facade"),
+        ],
+    )
+    sd = generate(program, strategy="magnet")
+    return program, sd
+
+
 def main() -> None:
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "/tmp/plankit-demo"
     import os
@@ -80,7 +103,7 @@ def main() -> None:
     store = VariantStore(os.path.join(out_dir, "variants.db"))
 
     for i, (name, (program, sd)) in enumerate(
-        {"strip": strip_demo(), "grid": grid_demo()}.items()
+        {"strip": strip_demo(), "grid": grid_demo(), "magnet": magnet_demo()}.items()
     ):
         report = evaluate(sd, program)
         print(f"=== {name} ===")
