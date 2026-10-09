@@ -27,12 +27,15 @@ class ConformanceReport:
         violated: Labels van geschonden harde eisen.
         missing: Labels van vereiste ruimten die ontbreken in het skelet.
         unconstrained: Labels die niet getoetst konden worden (zacht/onbekend).
+        missing_adj: Per kamer-key de vereiste buren (`door` + vereiste
+            `wall`) zonder gedeelde wand/deur (MFP-`!A`-lijst).
     """
 
     satisfied: list[str] = field(default_factory=list)
     violated: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     unconstrained: list[str] = field(default_factory=list)
+    missing_adj: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -104,13 +107,19 @@ def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
                 report.satisfied.append(label)
             else:
                 report.violated.append(label)
+                report.missing_adj.setdefault(edge.a, []).append(edge.b)
+                report.missing_adj.setdefault(edge.b, []).append(edge.a)
         else:  # "wall", "visual" — zacht
             if graph.has_edge(str(fa), str(fb)):
                 report.satisfied.append(label)
             elif edge.required:
                 report.violated.append(label)
+                report.missing_adj.setdefault(edge.a, []).append(edge.b)
+                report.missing_adj.setdefault(edge.b, []).append(edge.a)
             else:
                 report.unconstrained.append(label)
+    for key in report.missing_adj:
+        report.missing_adj[key] = sorted(set(report.missing_adj[key]))
     return report
 
 

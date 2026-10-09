@@ -46,7 +46,14 @@ from plankit.operators import (
 )
 from plankit.planar import Face, HalfEdge, PlanarSubdivision, Vertex
 from plankit.program import EDGE_KINDS, SPACE_ROLES, ProgramEdge, ProgramSpace, RoomProgram
-from plankit.quality import aspect_ratios, circulation_depth, facade_lengths, is_enfilade
+from plankit.quality import (
+    adjacency_gaps,
+    aspect_ratios,
+    circulation_depth,
+    facade_lengths,
+    fill_ratio,
+    is_enfilade,
+)
 from plankit.store import Variant, VariantStore, make_variant
 from plankit.svg import scrub_page, to_svg
 
@@ -95,6 +102,8 @@ __all__ = [
     "facade_lengths",
     "circulation_depth",
     "is_enfilade",
+    "fill_ratio",
+    "adjacency_gaps",
     # observatie
     "evaluate",
     "Variant",

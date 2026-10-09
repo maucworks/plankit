@@ -131,3 +131,56 @@ def test_validate_circulation_unreachable():
     r = validate_circulation(prog)
     assert not r.ok
     assert "k" in r.unreachable
+
+
+def _separated_rooms() -> tuple:
+    from plankit.planar import PlanarSubdivision
+
+    sd = PlanarSubdivision.from_faces(
+        [
+            [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)],
+            [(10.0, 0.0), (14.0, 0.0), (14.0, 3.0), (10.0, 3.0)],
+        ]
+    )
+    order = sorted(
+        sd.bounded_faces(),
+        key=lambda fid: sum(p[0] for p in sd.face_vertices(fid)),
+    )
+    for fid, label in zip(order, ["k", "w"]):
+        sd.faces[fid].label = label
+    prog = RoomProgram(
+        nodes={
+            "k": ProgramSpace(name="1.01", area_min=8),
+            "w": ProgramSpace(name="1.02", area_min=12),
+        },
+        edges=[ProgramEdge("k", "w", kind="door")],
+    )
+    return sd, prog
+
+
+def test_conform_missing_adj_reported():
+    sd, prog = _separated_rooms()
+    r = conform(sd, prog)
+    assert not r.ok
+    assert r.missing_adj == {"k": ["w"], "w": ["k"]}
+
+
+def test_conform_missing_adj_empty_when_ok():
+    r = conform(generate(_two_room()), _two_room())
+    assert r.ok
+    assert r.missing_adj == {}
+
+
+def test_conform_missing_adj_skips_unplaced():
+    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd.faces[0].label = "k"
+    prog = RoomProgram(
+        nodes={
+            "k": ProgramSpace(name="1.01", area_min=8),
+            "w": ProgramSpace(name="1.02", area_min=12),
+        },
+        edges=[ProgramEdge("k", "w", kind="door")],
+    )
+    r = conform(sd, prog)
+    assert "space:w" in r.missing
+    assert r.missing_adj == {}
