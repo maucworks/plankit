@@ -87,7 +87,10 @@ def test_coarse_layout_deterministic():
 def test_two_step_keys_and_no_overflow():
     proposal, issues = two_step(_toy(), seed=0)
     assert set(proposal) == {"w1", "s1", "w2", "s2", "gang", "kern"}
-    assert issues == []
+    assert not any("envelop te klein" in i for i in issues)
+    # eerlijk signaal: A2-blok deelt geen rand met gang (grof-pakking),
+    # dus het paar kan niet verankerd worden
+    assert any("geen gedeelde rand voor w2-gang" in i for i in issues)
 
 
 def test_two_step_deterministic():
@@ -128,6 +131,64 @@ def test_two_step_cross_block_door_at_shared_segment():
     assert issues == []
     r = conform(generate(prog, proposal=proposal), prog)
     assert "edge:w1-gang:door" in r.satisfied
+
+
+def test_two_step_pair_shares_wall_in_proposal():
+    from plankit.operators import _shared_wall
+
+    prog = RoomProgram(
+        nodes={
+            "w1": ProgramSpace(name="W1", area_min=15, group="A1"),
+            "s1": ProgramSpace(name="S1", area_min=10, group="A1"),
+            "gang": ProgramSpace(name="Gang", area_min=10, role="verkeer"),
+            "kern": ProgramSpace(name="Kern", area_min=8, role="verkeer", core=True),
+        },
+        edges=[
+            ProgramEdge("w1", "s1", kind="door"),
+            ProgramEdge("w1", "gang", kind="door"),
+            ProgramEdge("gang", "kern", kind="door"),
+        ],
+    )
+    proposal, _ = two_step(prog, seed=0)
+
+    def box(key):
+        pts = proposal[key]
+        xs = [p.x for p in pts]
+        ys = [p.y for p in pts]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    assert _shared_wall(box("w1"), box("gang")) > 0
+
+
+def test_two_step_short_segment_reports_issue():
+    prog = RoomProgram(
+        nodes={
+            "a": ProgramSpace(name="A", area_min=20, group="G1"),
+            "b": ProgramSpace(name="B", area_min=20, group="G2"),
+        },
+        edges=[ProgramEdge("a", "b", kind="door")],
+    )
+    blocks = {"G1": (0.0, 0.0, 10.0, 2.0), "G2": (10.0, 0.0, 12.0, 10.0)}
+    proposal, issues = two_step(prog, seed=0, blocks=blocks)
+    assert set(proposal) == {"a", "b"}  # graceful: wel geplaatst
+    assert any("a-b" in i for i in issues)
+
+
+def test_propose_magnet_placed_rooms_not_moved():
+    from plankit.operators import propose_magnet
+
+    prog = RoomProgram(
+        nodes={
+            "a": ProgramSpace(name="A", area_min=12),
+            "b": ProgramSpace(name="B", area_min=8),
+        },
+        edges=[ProgramEdge("a", "b", kind="door")],
+    )
+    fixed = (0.0, 0.0, 4.0, 3.0)
+    out = propose_magnet(prog, seed=0, placed={"a": fixed})
+    got = out["a"]
+    assert [(p.x, p.y) for p in got] == [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)]
+    assert set(out) == {"a", "b"}
 
 
 def test_squarify_blocks_scale_to_boundary():

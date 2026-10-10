@@ -243,6 +243,7 @@ def propose_magnet(
     attractors: dict[str, tuple[float, float]] | None = None,
     attract_bonus: float = 0.5,
     min_widths: dict[str, float] | None = None,
+    placed: dict[str, tuple[float, float, float, float]] | None = None,
 ) -> dict[str, list[Vec]]:
     """Greedy compositie: kamers magnetiseren tegen elkaar (MFP-volgorde+score).
 
@@ -278,9 +279,9 @@ def propose_magnet(
     for key in order:
         remaining.remove(key)
     while remaining:
-        placed = set(order)
+        done = set(order)
         scored = [
-            (len(partners[key] & placed) + rng.random() * 0.05, key) for key in remaining
+            (len(partners[key] & done) + rng.random() * 0.05, key) for key in remaining
         ]
         scored.sort()
         best = scored[-1][1]
@@ -343,7 +344,15 @@ def propose_magnet(
 
     rects: dict[str, tuple[float, float, float, float]] = {}
     out: dict[str, list[Vec]] = {}
+    if placed:
+        for key, rect in placed.items():
+            if key not in keys:
+                raise KeyError(f"propose_magnet: placed onbekende knoop {key!r}")
+            rects[key] = rect
+            out[key] = _rect_points(*rect)
     for key in order:
+        if key in rects:
+            continue  # voorgeplaatst: doet mee als obstakel/partner
         area = program.nodes[key].area_min
         min_width = min_widths.get(key) if min_widths is not None else None
         if bounds is None:
