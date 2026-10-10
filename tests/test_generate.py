@@ -138,6 +138,16 @@ def test_generate_many_stores_and_returns_best():
     assert sd is not None
 
 
+def test_generate_magnet_min_widths_conform():
+    from plankit.conform import conform
+
+    prog = _two_room_program()
+    widths = {"k": 2.1, "w": 2.1}
+    sd = generate(prog, strategy="magnet", seed=0, min_widths=widths)
+    r = conform(sd, prog, min_widths=widths)
+    assert r.ok
+
+
 def test_generate_skips_door_without_shared_edge():
     from plankit.conform import conform
 

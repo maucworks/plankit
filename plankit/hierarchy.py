@@ -267,11 +267,13 @@ def two_step(
     topology: str = "open-kern",
     seed: int = 0,
     blocks: dict[str, Rect] | None = None,
+    min_widths: dict[str, float] | None = None,
 ) -> tuple[dict[str, list[Vec]], list[str]]:
     """Two-step-voorstel: grof blokken, fijn kamers per woning in het blok.
 
     Met ``blocks`` (bv. uit :func:`squarify_blocks`) wordt de grof-stap
-    overgeslagen. Geeft ``(proposal, issues)``: kamers die buiten hun blok vallen
+    overgeslagen. Met ``min_widths`` respecteert de fijne vormkeuze de
+    breedte-eis. Geeft ``(proposal, issues)``: kamers die buiten hun blok vallen
     worden wel opgenomen maar gemeld als envelop-issue (graceful, M12a-lijn).
     """
     if topology not in TOPOLOGIES:
@@ -308,6 +310,7 @@ def two_step(
             seed=seed,
             bounds=block,
             attractors=sub_attractors,
+            min_widths=min_widths,
         )
         for key, pts in fine.items():
             proposal[key] = pts

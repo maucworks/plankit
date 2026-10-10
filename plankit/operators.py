@@ -31,18 +31,30 @@ def _rect_points(x0: float, y0: float, x1: float, y1: float) -> list[Vec]:
 
 
 def shape_for_area(
-    area: float, max_aspect: float = 1.5, landscape: bool | None = None
+    area: float,
+    max_aspect: float = 1.5,
+    landscape: bool | None = None,
+    min_width: float | None = None,
 ) -> tuple[float, float]:
     """Kies (w, d) voor *area* binnen een aspect-cap (MFP-factorparen).
 
     Geeft `w * d == area` (op float-epsilon na) met
     `max(w, d) / min(w, d) <= max_aspect`. Deterministisch: `landscape=True`
-    (default) geeft `w >= d`, `landscape=False` geeft `d > w`.
+    (default) geeft `w >= d`, `landscape=False` geeft `d > w`. Met
+    `min_width`: cap-effectief = min(cap, area/min_width²) zodat de smalste
+    zijde ≥ min_width; onhaalbaar (zelfs vierkant te smal) → vierkant op
+    min_width (grotere m²; conform meldt area>max).
     """
     if area <= 0:
         raise ValueError(f"shape_for_area: area moet positief zijn, got {area!r}")
     if max_aspect < 1:
         raise ValueError(f"shape_for_area: max_aspect moet >= 1 zijn, got {max_aspect!r}")
+    if min_width is not None:
+        if min_width <= 0:
+            raise ValueError(f"shape_for_area: min_width moet positief zijn, got {min_width!r}")
+        if area < min_width * min_width:
+            return (min_width, min_width)
+        max_aspect = min(max_aspect, area / (min_width * min_width))
     if landscape is None:
         landscape = True
     w = math.sqrt(area * max_aspect)
@@ -60,12 +72,13 @@ def place_space(
     w: float | None = None,
     d: float | None = None,
     max_aspect: float = 1.5,
+    min_width: float | None = None,
 ) -> list[Vec]:
     """Plaats ruimte *key* als rechthoek met oorsprong (x0, y0).
 
     Afmetingen honoreren ``area_min``/``area_max``: geef beide, of één (de
     ander volgt uit ``area_min``), of geen (vorm uit :func:`shape_for_area`
-    binnen ``max_aspect``).
+    binnen ``max_aspect`` en ``min_width``).
     """
     if key not in program.nodes:
         raise KeyError(f"place_space: onbekende knoop {key!r}")
@@ -91,7 +104,7 @@ def place_space(
             raise ValueError(f"place_space: d moet positief zijn, got {d!r}")
         w = lo / d
     else:
-        w, d = shape_for_area(lo, max_aspect)
+        w, d = shape_for_area(lo, max_aspect, min_width=min_width)
     return _rect_points(x0, y0, x0 + w, y0 + d)
 
 
@@ -151,11 +164,13 @@ def layout_row(
     depth: float,
     gap: float = 0.0,
     max_aspect: float = 1.5,
+    min_width: float | None = None,
 ) -> dict[str, list[Vec]]:
     """Leg ruimten naast elkaar in een rij met vaste diepte.
 
     Elke ruimte krijgt breedte ``area_min / depth``. Deterministisch;
-    samengesteld uit :func:`place_space` (``max_aspect`` wordt doorgegeven).
+    samengesteld uit :func:`place_space` (``max_aspect``/``min_width`` worden
+    doorgegeven).
     """
     if depth <= 0:
         raise ValueError(f"layout_row: depth moet positief zijn, got {depth!r}")
@@ -168,7 +183,9 @@ def layout_row(
         if space.area_min is None:
             raise ValueError(f"layout_row: {key!r} heeft geen area_min")
         w = space.area_min / depth
-        out[key] = place_space(program, key, x, y0, w=w, d=depth, max_aspect=max_aspect)
+        out[key] = place_space(
+            program, key, x, y0, w=w, d=depth, max_aspect=max_aspect, min_width=min_width
+        )
         x += w + gap
     return out
 
@@ -225,6 +242,7 @@ def propose_magnet(
     bounds: tuple[float, float, float, float] | None = None,
     attractors: dict[str, tuple[float, float]] | None = None,
     attract_bonus: float = 0.5,
+    min_widths: dict[str, float] | None = None,
 ) -> dict[str, list[Vec]]:
     """Greedy compositie: kamers magnetiseren tegen elkaar (MFP-volgorde+score).
 
@@ -236,7 +254,8 @@ def propose_magnet(
     clusteren via ``wet_bonus`` (additief); daglicht-kamers (`daylight`) scoren
     ``daylight_bonus`` per meter niet-rakende wand. Met ``bounds`` blijft alles
     binnen de envelop (two-step); ``attractors`` trekt kamers met partners
-    buiten het blok naar de gedeelde blokrand (grens-coördinatie).
+    buiten het blok naar de gedeelde blokrand (grens-coördinatie). Met
+    ``min_widths`` (kamer-key → meters) respecteert de vormkeuze de breedte-eis.
     Deterministisch bij gelijke *seed*.
     """
     keys = [k for k in program.nodes if not program.nodes[k].exterior]
@@ -326,13 +345,14 @@ def propose_magnet(
     out: dict[str, list[Vec]] = {}
     for key in order:
         area = program.nodes[key].area_min
+        min_width = min_widths.get(key) if min_widths is not None else None
         if bounds is None:
             orientations = (rng.random() < 0.5,)
         else:
             orientations = (True, False)  # beide proberen: passing in de envelop
         if not rects:
             landscape = orientations[0]
-            w, h = shape_for_area(area, max_aspect, landscape=landscape)
+            w, h = shape_for_area(area, max_aspect, landscape=landscape, min_width=min_width)
             if bounds is not None and attractors is not None and key in attractors:
                 ax, ay = attractors[key]
                 corners = [
@@ -357,7 +377,7 @@ def propose_magnet(
             best_rect: tuple[float, float, float, float] | None = None
             best_score = -1.0
             for landscape in orientations:
-                w, h = shape_for_area(area, max_aspect, landscape=landscape)
+                w, h = shape_for_area(area, max_aspect, landscape=landscape, min_width=min_width)
                 for other in rects.values():
                     for ox, oy in _anchors(other, w, h):
                         cand = (ox, oy, ox + w, oy + h)
@@ -371,12 +391,12 @@ def propose_magnet(
                             best_rect = cand
             if best_rect is None and bounds is not None:
                 for landscape in orientations:
-                    w, h = shape_for_area(area, max_aspect, landscape=landscape)
+                    w, h = shape_for_area(area, max_aspect, landscape=landscape, min_width=min_width)
                     best_rect = free_inside(w, h)
                     if best_rect is not None:
                         break
             if best_rect is None:  # volgebouwd: rechts van de bbox plakken
-                w, h = shape_for_area(area, max_aspect, landscape=orientations[0])
+                w, h = shape_for_area(area, max_aspect, landscape=orientations[0], min_width=min_width)
                 x = max(r[2] for r in rects.values())
                 best_rect = (x, 0.0, x + w, h)
             rect = best_rect

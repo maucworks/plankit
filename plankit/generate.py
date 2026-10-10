@@ -41,19 +41,20 @@ def generate(
     proposal: dict | None = None,
     strategy: str = "row",
     seed: int = 0,
+    min_widths: dict[str, float] | None = None,
 ) -> PlanarSubdivision:
     """Bouw het skelet uit het PvE.
 
     ``proposal`` is ``{room_key: [punten...]}`` (rechthoeken). Zonder proposal
     bepaalt ``strategy`` het voorstel: ``"row"`` (strip, default; negeert
     ``seed``) of ``"magnet"`` (contact-gedreven compositie met ``seed``).
-    ``door``-kanten uit het PvE worden op de gedeelde edges gemarkeerd; paren
-    zonder gedeelde edge worden overgeslagen (zie
-    :func:`plankit.conform.conform` voor rapportage).
+    ``min_widths`` gaat naar de magnet-vormkeuze. ``door``-kanten uit het PvE
+    worden op de gedeelde edges gemarkeerd; paren zonder gedeelde edge worden
+    overgeslagen (zie :func:`plankit.conform.conform` voor rapportage).
     """
     if proposal is None:
         if strategy == "magnet":
-            proposal = propose_magnet(program, seed=seed)
+            proposal = propose_magnet(program, seed=seed, min_widths=min_widths)
         elif strategy == "row":
             proposal = propose_layout(program)
         else:
@@ -124,6 +125,7 @@ def generate_many(
     strategy: str = "magnet",
     seeds: range = range(10),
     store=None,
+    min_widths: dict[str, float] | None = None,
 ) -> tuple[PlanarSubdivision, ConformanceReport]:
     """Genereer per seed een variant, bewaar alle in de store, geef de beste terug.
 
@@ -133,7 +135,7 @@ def generate_many(
     """
     sds: list[PlanarSubdivision] = []
     for n, seed in enumerate(seeds):
-        sd = generate(program, strategy=strategy, seed=seed)
+        sd = generate(program, strategy=strategy, seed=seed, min_widths=min_widths)
         sds.append(sd)
         if store is not None:
             from plankit.store import make_variant

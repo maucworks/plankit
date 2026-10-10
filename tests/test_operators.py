@@ -156,6 +156,35 @@ def test_shape_for_area_rejects_bad_input():
         shape_for_area(-5.0)
     with pytest.raises(ValueError):
         shape_for_area(10.0, max_aspect=0.5)
+    with pytest.raises(ValueError):
+        shape_for_area(10.0, min_width=0.0)
+
+
+def test_shape_for_area_min_width_caps_aspect():
+    w, d = shape_for_area(5.0, min_width=2.0)
+    assert w * d == pytest.approx(5.0)
+    assert min(w, d) >= 2.0 - 1e-9
+    assert max(w, d) / min(w, d) <= 1.25 + 1e-9
+
+
+def test_shape_for_area_min_width_infeasible_grows():
+    w, d = shape_for_area(4.0, min_width=2.1)
+    assert (w, d) == (2.1, 2.1)
+
+
+def test_propose_magnet_respects_min_widths():
+    prog = RoomProgram(
+        nodes={
+            "k": ProgramSpace(name="Keuken", area_min=4.0),
+            "w": ProgramSpace(name="Woonkamer", area_min=20.0),
+        },
+        edges=[ProgramEdge("k", "w", kind="door")],
+    )
+    out = propose_magnet(prog, seed=0, min_widths={"k": 2.1, "w": 2.1})
+    for key, pts in out.items():
+        xs = [p.x for p in pts]
+        ys = [p.y for p in pts]
+        assert min(max(xs) - min(xs), max(ys) - min(ys)) >= 2.1 - 1e-9
 
 
 def test_place_space_fallback_uses_shape():
