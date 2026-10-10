@@ -383,3 +383,64 @@ def propose_magnet(
         rects[key] = rect
         out[key] = _rect_points(*rect)
     return out
+
+
+def _worst(row: list[float], side: float) -> float:
+    """Slechtste aspect-ratio als rij *row* een strook langs zijde *side* vormt."""
+    s = sum(row)
+    if s <= 0 or side <= 0:
+        return float("inf")
+    return max(max(a * side * side / (s * s), (s * s) / (a * side * side)) for a in row)
+
+
+def squarify_rects(
+    items: list[tuple[str, float]], rect: tuple[float, float, float, float]
+) -> dict[str, tuple[float, float, float, float]]:
+    """Squarified treemap: verdeel *rect* in kamer-m² met lage aspect-ratio's.
+
+    Naar Bruls e.a.: dalend sorteren, rijen langs de langste zijde, rij
+    fixeren zodra toevoegen verslechtert (`worst()`). Deterministisch; exacte
+    oppervlakten; betegeling zonder gaten (op float-epsilon na).
+    """
+    children = sorted(
+        ((k, float(a)) for k, a in items), key=lambda kv: -kv[1]
+    )
+    for key, area in children:
+        if area <= 0:
+            raise ValueError(f"squarify_rects: area moet positief zijn, got {key!r}={area!r}")
+    out: dict[str, tuple[float, float, float, float]] = {}
+    x0, y0, x1, y1 = rect
+    row: list[tuple[str, float]] = []
+
+    def layout(row: list[tuple[str, float]]) -> None:
+        """Leg rij als strook langs de korte zijde (links/onder) en krimpt rest in."""
+        nonlocal x0, y0, x1, y1
+        s = sum(a for _, a in row)
+        if (y1 - y0) <= (x1 - x0):  # kort = hoogte: strook links, volle hoogte
+            t = s / (y1 - y0)
+            y = y0
+            for key, a in row:
+                h = a / t
+                out[key] = (x0, y, x0 + t, y + h)
+                y += h
+            x0 += t
+        else:  # kort = breedte: strook onder, volle breedte
+            t = s / (x1 - x0)
+            x = x0
+            for key, a in row:
+                w = a / t
+                out[key] = (x, y0, x + w, y0 + t)
+                x += w
+            y0 += t
+
+    for key, area in children:
+        side = min(x1 - x0, y1 - y0)
+        trial = [a for _, a in row] + [area]
+        if row and _worst(trial, side) > _worst([a for _, a in row], side):
+            layout(row)
+            row = [(key, area)]
+        else:
+            row.append((key, area))
+    if row:
+        layout(row)
+    return out

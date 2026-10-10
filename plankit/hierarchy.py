@@ -18,6 +18,7 @@ from plankit.operators import (
     _shared_wall,
     propose_magnet,
     shape_for_area,
+    squarify_rects,
 )
 from plankit.program import RoomProgram, dwelling_budget
 
@@ -214,6 +215,45 @@ def coarse_layout(
     return coarse_open_kern(program, seed=seed)
 
 
+def _polygon_area(poly: list[tuple[float, float]]) -> float:
+    """Oppervlak van een polygoon (shoelace)."""
+    s = 0.0
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        s += x0 * y1 - x1 * y0
+    return abs(s) / 2.0
+
+
+def squarify_blocks(
+    program: RoomProgram, boundary: list[tuple[float, float]]
+) -> dict[str, Rect]:
+    """Squarify-grof: verdeel de outline-bbox in woningblokken uit budgetten (D3).
+
+    Budget-maxima worden geschaald naar de outline-m² (top-down budget-antwoord);
+    groeploze ruimten doen mee op area_min. Exacte oppervlakten, aspect-gestuurd.
+    """
+    members = supernodes(program)
+    areas: dict[str, float] = {}
+    for superkey, room_keys in members.items():
+        group = program.nodes[room_keys[0]].group
+        if group is not None:
+            areas[superkey] = dwelling_budget(program, group)[1]
+        else:
+            areas[superkey] = sum(program.nodes[k].area_min or 0.0 for k in room_keys)
+    total = sum(areas.values())
+    if total <= 0:
+        raise ValueError("squarify_blocks: geen oppervlak om te verdelen")
+    if _polygon_area(boundary) <= 0:
+        raise ValueError("squarify_blocks: boundary heeft geen oppervlak")
+    scale = _polygon_area(boundary) / total
+    xs = [p[0] for p in boundary]
+    ys = [p[1] for p in boundary]
+    rect = (min(xs), min(ys), max(xs), max(ys))
+    return squarify_rects([(key, area * scale) for key, area in areas.items()], rect)
+
+
 def _sub_program(program: RoomProgram, members: list[str]) -> RoomProgram:
     """Deel-PvE van een woninggroep (alleen interne kanten)."""
     return RoomProgram(
@@ -223,14 +263,23 @@ def _sub_program(program: RoomProgram, members: list[str]) -> RoomProgram:
 
 
 def two_step(
-    program: RoomProgram, topology: str = "open-kern", seed: int = 0
+    program: RoomProgram,
+    topology: str = "open-kern",
+    seed: int = 0,
+    blocks: dict[str, Rect] | None = None,
 ) -> tuple[dict[str, list[Vec]], list[str]]:
     """Two-step-voorstel: grof blokken, fijn kamers per woning in het blok.
 
-    Geeft ``(proposal, issues)``: kamers die buiten hun blok vallen worden
-    wel opgenomen maar gemeld als envelop-issue (graceful, M12a-lijn).
+    Met ``blocks`` (bv. uit :func:`squarify_blocks`) wordt de grof-stap
+    overgeslagen. Geeft ``(proposal, issues)``: kamers die buiten hun blok vallen
+    worden wel opgenomen maar gemeld als envelop-issue (graceful, M12a-lijn).
     """
-    blocks = coarse_layout(program, topology=topology, seed=seed)
+    if topology not in TOPOLOGIES:
+        raise ValueError(f"two_step: onbekende typologie {topology!r}")
+    if blocks is None:
+        if topology != "open-kern":
+            raise NotImplementedError(f"two_step: typologie {topology!r} volgt later")
+        blocks = coarse_layout(program, topology=topology, seed=seed)
     members = supernodes(program)
     segments = _shared_segments(blocks)
     room_super = {k: s for s, keys in members.items() for k in keys}

@@ -29,7 +29,14 @@ from plankit.conform import (
     validate_circulation,
 )
 from plankit.constraints import Constraint, program_constraints
-from plankit.derive import door_pairs, perimeter_spaces, space_adjacency, space_footprints
+from plankit.derive import (
+    WallSegment,
+    door_pairs,
+    perimeter_spaces,
+    space_adjacency,
+    space_footprints,
+    wall_segments,
+)
 from plankit.events import evaluate
 from plankit.generate import generate, generate_many, propose_layout, select_best
 from plankit.geometry import Vec
@@ -39,6 +46,7 @@ from plankit.hierarchy import (
     DwellingEnvelope,
     coarse_layout,
     dwelling_envelope,
+    squarify_blocks,
     supernodes,
     two_step,
 )
@@ -51,6 +59,7 @@ from plankit.operators import (
     remove_room,
     shape_for_area,
     split_footprint,
+    squarify_rects,
 )
 from plankit.planar import Face, HalfEdge, PlanarSubdivision, Vertex
 from plankit.program import (
@@ -95,6 +104,8 @@ __all__ = [
     "perimeter_spaces",
     "space_footprints",
     "door_pairs",
+    "wall_segments",
+    "WallSegment",
     # generatie
     "generate",
     "generate_many",
@@ -103,6 +114,7 @@ __all__ = [
     "propose_magnet",
     "place_space",
     "shape_for_area",
+    "squarify_rects",
     "split_footprint",
     "mirror_footprint",
     "add_room",
@@ -115,6 +127,7 @@ __all__ = [
     "supernodes",
     "coarse_layout",
     "two_step",
+    "squarify_blocks",
     # constraints
     "Constraint",
     "program_constraints",

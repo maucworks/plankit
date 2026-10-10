@@ -10,6 +10,7 @@ from plankit.generate import generate
 from plankit.hierarchy import (
     coarse_layout,
     dwelling_envelope,
+    squarify_blocks,
     supernodes,
     two_step,
 )
@@ -127,3 +128,29 @@ def test_two_step_cross_block_door_at_shared_segment():
     assert issues == []
     r = conform(generate(prog, proposal=proposal), prog)
     assert "edge:w1-gang:door" in r.satisfied
+
+
+def test_squarify_blocks_scale_to_boundary():
+    prog = _toy()
+    boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    blocks = squarify_blocks(prog, boundary)
+    assert set(blocks) == {"A1", "A2", "gang", "kern"}
+    total = sum((r[2] - r[0]) * (r[3] - r[1]) for r in blocks.values())
+    assert total == pytest.approx(200.0)
+    for rect in blocks.values():
+        assert 0.0 - 1e-9 <= rect[0] and rect[2] <= 20.0 + 1e-9
+        assert 0.0 - 1e-9 <= rect[1] and rect[3] <= 10.0 + 1e-9
+
+
+def test_squarify_blocks_rejects_empty():
+    prog = RoomProgram(nodes={}, edges=[])
+    with pytest.raises(ValueError):
+        squarify_blocks(prog, [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
+
+
+def test_two_step_with_squarify_blocks():
+    prog = _toy()
+    boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    proposal, issues = two_step(prog, seed=0, blocks=squarify_blocks(prog, boundary))
+    assert set(proposal) == {"w1", "s1", "w2", "s2", "gang", "kern"}
+    assert isinstance(issues, list)

@@ -14,6 +14,7 @@ from plankit.operators import (
     remove_room,
     shape_for_area,
     split_footprint,
+    squarify_rects,
 )
 
 
@@ -296,3 +297,38 @@ def test_propose_magnet_first_room_to_attractor_corner():
     out = propose_magnet(prog, seed=0, bounds=(0.0, 0.0, 10.0, 10.0), attractors={"w": (5.0, 10.0)})
     box = _bbox(out["w"])
     assert box[3] == pytest.approx(10.0)  # raakt de bovenrand bij de attractor
+
+
+def _squarify_area(rect) -> float:
+    return (rect[2] - rect[0]) * (rect[3] - rect[1])
+
+
+def _squarify_aspect(rect) -> float:
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    return max(w, h) / min(w, h)
+
+
+def test_squarify_rects_exact_areas_and_tiling():
+    items = [(f"r{i}", a) for i, a in enumerate([6.0, 6.0, 4.0, 3.0, 2.0, 2.0, 1.0])]
+    out = squarify_rects(items, (0.0, 0.0, 6.0, 4.0))
+    assert set(out) == {f"r{i}" for i in range(7)}
+    for (key, area), rect in zip(items, [out[k] for k, _ in items]):
+        assert _squarify_area(rect) == pytest.approx(area)
+    assert sum(_squarify_area(r) for r in out.values()) == pytest.approx(24.0)
+
+
+def test_squarify_rects_aspect_bounded():
+    items = [(f"r{i}", a) for i, a in enumerate([6.0, 6.0, 4.0, 3.0, 2.0, 2.0, 1.0])]
+    out = squarify_rects(items, (0.0, 0.0, 6.0, 4.0))
+    assert max(_squarify_aspect(r) for r in out.values()) <= 3.0
+
+
+def test_squarify_rects_deterministic_and_rejects():
+    items = [("a", 10.0), ("b", 5.0)]
+    assert squarify_rects(items, (0.0, 0.0, 5.0, 3.0)) == squarify_rects(
+        items, (0.0, 0.0, 5.0, 3.0)
+    )
+    with pytest.raises(ValueError):
+        squarify_rects([("a", 0.0)], (0.0, 0.0, 5.0, 3.0))
+    with pytest.raises(ValueError):
+        squarify_rects([("a", -2.0)], (0.0, 0.0, 5.0, 3.0))
