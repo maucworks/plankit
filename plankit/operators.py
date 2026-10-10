@@ -222,6 +222,7 @@ def propose_magnet(
     partner_bonus: float = 2.0,
     wet_bonus: float = 1.5,
     daylight_bonus: float = 1.0,
+    bounds: tuple[float, float, float, float] | None = None,
 ) -> dict[str, list[Vec]]:
     """Greedy compositie: kamers magnetiseren tegen elkaar (MFP-volgorde+score).
 
@@ -232,7 +233,8 @@ def propose_magnet(
     ``partner_bonus`` keer). Natte cellen (`wet`) clusteren via ``wet_bonus``
     (additief); daglicht-kamers (`daylight`) scoren ``daylight_bonus`` per
     meter niet-rakende wand (blootgestelde perimeter — geen outline nodig).
-    Deterministisch bij gelijke *seed*.
+    Met ``bounds`` (x0, y0, x1, y1) blijft alles binnen de envelop (two-step);
+    zonder bounds vrij vlak. Deterministisch bij gelijke *seed*.
     """
     keys = [k for k in program.nodes if not program.nodes[k].exterior]
     for key in keys:
@@ -262,39 +264,90 @@ def propose_magnet(
         best = scored[-1][1]
         order.append(best)
         remaining.remove(best)
+
+    def inside(cand: tuple[float, float, float, float]) -> bool:
+        """Past de kandidaat binnen de bounds (of geen bounds)."""
+        if bounds is None:
+            return True
+        return (
+            cand[0] >= bounds[0] - _TOL
+            and cand[1] >= bounds[1] - _TOL
+            and cand[2] <= bounds[2] + _TOL
+            and cand[3] <= bounds[3] + _TOL
+        )
+
+    def score_of(
+        cand: tuple[float, float, float, float], key: str, w: float, h: float
+    ) -> float:
+        """Contact-score van een kandidaat (partners, nat, daglicht)."""
+        shared_total = 0.0
+        score = 0.0
+        for okey, orect in rects.items():
+            shared = _shared_wall(cand, orect)
+            shared_total += shared
+            if okey in partners[key]:
+                score += shared * partner_bonus
+            else:
+                score += shared
+            if key in wet_rooms and okey in wet_rooms:
+                score += shared * wet_bonus
+        if program.nodes[key].daylight:
+            score += (2 * (w + h) - shared_total) * daylight_bonus
+        return score
+
+    def free_inside(
+        w: float, h: float, step: float = 0.5
+    ) -> tuple[float, float, float, float] | None:
+        """Eerste overlap-vrije plek binnen de bounds (scan, deterministisch)."""
+        assert bounds is not None
+        oy = bounds[1]
+        while oy + h <= bounds[3] + _TOL:
+            ox = bounds[0]
+            while ox + w <= bounds[2] + _TOL:
+                cand = (ox, oy, ox + w, oy + h)
+                if not any(_rects_overlap(cand, r) for r in rects.values()):
+                    return cand
+                ox += step
+            oy += step
+        return None
+
     rects: dict[str, tuple[float, float, float, float]] = {}
     out: dict[str, list[Vec]] = {}
     for key in order:
-        w, h = shape_for_area(
-            program.nodes[key].area_min, max_aspect, landscape=rng.random() < 0.5
-        )
+        area = program.nodes[key].area_min
+        if bounds is None:
+            orientations = (rng.random() < 0.5,)
+        else:
+            orientations = (True, False)  # beide proberen: passing in de envelop
         if not rects:
-            rect = (0.0, 0.0, w, h)
+            landscape = orientations[0]
+            w, h = shape_for_area(area, max_aspect, landscape=landscape)
+            ox, oy = (bounds[0], bounds[1]) if bounds is not None else (0.0, 0.0)
+            rect = (ox, oy, ox + w, oy + h)
         else:
             best_rect: tuple[float, float, float, float] | None = None
             best_score = -1.0
-            for other in rects.values():
-                for ox, oy in _anchors(other, w, h):
-                    cand = (ox, oy, ox + w, oy + h)
-                    if any(_rects_overlap(cand, r) for r in rects.values()):
-                        continue
-                    shared_total = 0.0
-                    score = 0.0
-                    for okey, orect in rects.items():
-                        shared = _shared_wall(cand, orect)
-                        shared_total += shared
-                        if okey in partners[key]:
-                            score += shared * partner_bonus
-                        else:
-                            score += shared
-                        if key in wet_rooms and okey in wet_rooms:
-                            score += shared * wet_bonus
-                    if program.nodes[key].daylight:
-                        score += (2 * (w + h) - shared_total) * daylight_bonus
-                    if score > best_score:
-                        best_score = score
-                        best_rect = cand
+            for landscape in orientations:
+                w, h = shape_for_area(area, max_aspect, landscape=landscape)
+                for other in rects.values():
+                    for ox, oy in _anchors(other, w, h):
+                        cand = (ox, oy, ox + w, oy + h)
+                        if not inside(cand):
+                            continue
+                        if any(_rects_overlap(cand, r) for r in rects.values()):
+                            continue
+                        score = score_of(cand, key, w, h)
+                        if score > best_score:
+                            best_score = score
+                            best_rect = cand
+            if best_rect is None and bounds is not None:
+                for landscape in orientations:
+                    w, h = shape_for_area(area, max_aspect, landscape=landscape)
+                    best_rect = free_inside(w, h)
+                    if best_rect is not None:
+                        break
             if best_rect is None:  # volgebouwd: rechts van de bbox plakken
+                w, h = shape_for_area(area, max_aspect, landscape=orientations[0])
                 x = max(r[2] for r in rects.values())
                 best_rect = (x, 0.0, x + w, h)
             rect = best_rect

@@ -34,6 +34,14 @@ from plankit.events import evaluate
 from plankit.generate import generate, propose_layout
 from plankit.geometry import Vec
 from plankit.graph import Graph
+from plankit.hierarchy import (
+    TOPOLOGIES,
+    DwellingEnvelope,
+    coarse_layout,
+    dwelling_envelope,
+    supernodes,
+    two_step,
+)
 from plankit.operators import (
     add_room,
     layout_row,
@@ -96,6 +104,13 @@ __all__ = [
     "add_room",
     "remove_room",
     "layout_row",
+    # hiërarchie (two-step)
+    "TOPOLOGIES",
+    "DwellingEnvelope",
+    "dwelling_envelope",
+    "supernodes",
+    "coarse_layout",
+    "two_step",
     # constraints
     "Constraint",
     "program_constraints",
