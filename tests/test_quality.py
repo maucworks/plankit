@@ -10,7 +10,9 @@ from plankit.quality import (
     adjacency_gaps,
     aspect_ratios,
     circulation_depth,
+    escape_depth,
     facade_lengths,
+    facade_ratio,
     fill_ratio,
     is_enfilade,
 )
@@ -104,3 +106,34 @@ def test_adjacency_gaps_skips_soft_and_unplaced():
         ],
     )
     assert adjacency_gaps(sd, prog) == {}
+
+
+def test_facade_ratio_strip():
+    sd = generate(_two_room())  # k = 2x4 (gevel 8), w = 5x4 (gevel 14)
+    assert facade_ratio(sd) == pytest.approx(22.0 / 28.0)
+
+
+def test_escape_depth_from_core():
+    prog = RoomProgram(
+        nodes={
+            "kern": ProgramSpace(name="Kern", core=True),
+            "g": ProgramSpace(name="Gang"),
+            "k": ProgramSpace(name="Kamer"),
+        },
+        edges=[
+            ProgramEdge("kern", "g", kind="door"),
+            ProgramEdge("g", "k", kind="door"),
+        ],
+    )
+    proposal = {
+        "kern": [(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)],
+        "g": [(3.0, 0.0), (6.0, 0.0), (6.0, 3.0), (3.0, 3.0)],
+        "k": [(6.0, 0.0), (9.0, 0.0), (9.0, 3.0), (6.0, 3.0)],
+    }
+    sd = generate(prog, proposal=proposal)
+    assert escape_depth(sd, prog) == {"kern": 0.0, "g": 1.0, "k": 2.0}
+
+
+def test_escape_depth_without_core_empty():
+    sd = generate(_two_room())
+    assert escape_depth(sd, _two_room()) == {}

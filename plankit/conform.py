@@ -18,6 +18,19 @@ from plankit.program import RoomProgram
 _TOL = 1e-6
 
 
+def _point_in_polygon(pt: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
+    """Ray casting: True als punt strikt binnen de polygoon ligt."""
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        if (y0 > y) != (y1 > y) and x < (x1 - x0) * (y - y0) / (y1 - y0) + x0:
+            inside = not inside
+    return inside
+
+
 @dataclass
 class ConformanceReport:
     """Resultaat van :func:`conform`.
@@ -43,11 +56,19 @@ class ConformanceReport:
         return not self.violated and not self.missing
 
 
-def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
+def conform(
+    sd: PlanarSubdivision,
+    program: RoomProgram,
+    boundary: list[tuple[float, float]] | None = None,
+    min_widths: dict[str, float] | None = None,
+) -> ConformanceReport:
     """Vergelijk een skelet met een PvE-graaf.
 
     Koppelt programmaruimten aan faces op ``Face.label``, toetst oppervlakte-
     ranges en de getypeerde kanten (``door``/``forbidden``/``facade``/``wall``).
+    Met ``boundary``: faces met centroid buiten de polygoon schenden
+    (centroid-test; exacte clipping is later werk). Met ``min_widths``
+    (kamer-key → minimale breedte): faces smaller dan de limiet schenden.
     Exterieure knopen zijn declaraties (``exterior=True``), geen te realiseren
     ruimten.
     """
@@ -71,6 +92,21 @@ def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
         if space.area_max is not None and area > space.area_max + _TOL:
             report.violated.append(f"space:{key}:area>{space.area_max}")
             continue
+        if boundary is not None:
+            pts = sd.face_vertices(fid)
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
+            if not _point_in_polygon((cx, cy), boundary):
+                report.violated.append(f"space:{key}:buiten-outline")
+                continue
+        if min_widths is not None and key in min_widths:
+            pts = sd.face_vertices(fid)
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            narrow = min(max(xs) - min(xs), max(ys) - min(ys))
+            if narrow < min_widths[key] - _TOL:
+                report.violated.append(f"space:{key}:breedte<{min_widths[key]}")
+                continue
         report.satisfied.append(f"space:{key}")
 
     for edge in program.edges:

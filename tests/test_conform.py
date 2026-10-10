@@ -214,3 +214,39 @@ def test_conform_missing_adj_skips_unplaced():
     r = conform(sd, prog)
     assert "space:w" in r.missing
     assert r.missing_adj == {}
+
+
+def _bounded_two_room():
+    prog = RoomProgram(
+        nodes={
+            "k": ProgramSpace(name="1.01", area_min=8),
+            "w": ProgramSpace(name="1.02", area_min=20),
+        },
+        edges=[ProgramEdge("k", "w", kind="door")],
+    )
+    sd = generate(prog)
+    return sd, prog
+
+
+def test_conform_boundary_inside_ok():
+    sd, prog = _bounded_two_room()
+    boundary = [(-5.0, -5.0), (30.0, -5.0), (30.0, 15.0), (-5.0, 15.0)]
+    r = conform(sd, prog, boundary=boundary)
+    assert r.ok
+
+
+def test_conform_boundary_outside_violated():
+    sd, prog = _bounded_two_room()
+    boundary = [(100.0, 100.0), (200.0, 100.0), (200.0, 200.0), (100.0, 200.0)]
+    r = conform(sd, prog, boundary=boundary)
+    assert not r.ok
+    assert any("buiten-outline" in v for v in r.violated)
+
+
+def test_conform_min_widths_pass_and_fail():
+    sd, prog = _bounded_two_room()  # rij: k is 2,0 breed (8 m² bij diepte 4,0)
+    r = conform(sd, prog, min_widths={"k": 2.0, "w": 2.1})
+    assert r.ok
+    r2 = conform(sd, prog, min_widths={"k": 2.1})
+    assert any("breedte<2.1" in v for v in r2.violated)
+    assert not r2.ok

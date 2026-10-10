@@ -65,7 +65,9 @@ from plankit.quality import (
     adjacency_gaps,
     aspect_ratios,
     circulation_depth,
+    escape_depth,
     facade_lengths,
+    facade_ratio,
     fill_ratio,
     is_enfilade,
 )
@@ -125,7 +127,9 @@ __all__ = [
     # kwaliteit (laag 2)
     "aspect_ratios",
     "facade_lengths",
+    "facade_ratio",
     "circulation_depth",
+    "escape_depth",
     "is_enfilade",
     "fill_ratio",
     "adjacency_gaps",

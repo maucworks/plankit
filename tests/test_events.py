@@ -21,4 +21,11 @@ def test_evaluate_has_both_layers():
     report = evaluate(sd, _two_room())
     assert "conformance" in report
     assert "quality" in report
-    assert set(report["quality"]) == {"aspect_ratio", "facade_length", "circulation_depth", "enfilade"}
+    assert set(report["quality"]) == {
+        "aspect_ratio",
+        "facade_length",
+        "facade_ratio",
+        "circulation_depth",
+        "escape_depth",
+        "enfilade",
+    }

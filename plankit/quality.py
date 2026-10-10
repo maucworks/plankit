@@ -137,3 +137,48 @@ def adjacency_gaps(
             dy = max(0.0, a[1] - b[3], b[1] - a[3])
             out[(edge.a, edge.b)] = max(dx, dy)
     return out
+
+
+def facade_ratio(sd: PlanarSubdivision) -> float:
+    """Gevel-ratio: Σ gevel-lengte / Σ ruimte-oppervlak (compactheid; lager = compacter)."""
+    total_area = sum(sd.face_area(fid) for fid in sd.bounded_faces())
+    if total_area <= 0:
+        return 0.0
+    return sum(facade_lengths(sd).values()) / total_area
+
+
+def escape_depth(
+    sd: PlanarSubdivision, program: "RoomProgram"
+) -> dict[str, float]:
+    """Loopafstand (deur-stappen) per ruimte tot de dichtstbijzijnde kern.
+
+    Kern = face met label van een `core`-knoop. Zonder geplaatste kern leeg.
+    Basis voor vluchtweg-toetsing (limiet uit het PvE volgt later).
+    """
+    from collections import deque
+
+    face_by_key = {
+        f.label: str(i) for i, f in enumerate(sd.faces) if not f.exterior and f.label
+    }
+    core_ids = {
+        face_by_key[key]
+        for key, space in program.nodes.items()
+        if space.core and key in face_by_key
+    }
+    if not core_ids:
+        return {}
+    g = access_graph(sd)
+    dist: dict[str, int] = {}
+    queue: deque[str] = deque()
+    for cid in core_ids:
+        if cid in g:
+            dist[cid] = 0
+            queue.append(cid)
+    while queue:
+        cur = queue.popleft()
+        for nbr in g.neighbors(cur):
+            if nbr not in dist:
+                dist[nbr] = dist[cur] + 1
+                queue.append(nbr)
+    labels = {fid: key for key, fid in face_by_key.items()}
+    return {labels[fid]: float(d) for fid, d in dist.items() if fid in labels}
