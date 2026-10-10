@@ -223,18 +223,21 @@ def propose_magnet(
     wet_bonus: float = 1.5,
     daylight_bonus: float = 1.0,
     bounds: tuple[float, float, float, float] | None = None,
+    attractors: dict[str, tuple[float, float]] | None = None,
+    attract_bonus: float = 0.5,
 ) -> dict[str, list[Vec]]:
     """Greedy compositie: kamers magnetiseren tegen elkaar (MFP-volgorde+score).
 
     Plaatsvolgorde: entrance eerst, daarna de kamer met de meeste reeds
     geplaatste adjacentie-buren (`door`/`wall`; seeded jitter als tie-break).
-    Elke kamer krijgt een vorm uit :func:`shape_for_area` (oriëntatie seeded)
-    en de overlap-vrije positie met de meeste gedeelde wand (partners tellen
-    ``partner_bonus`` keer). Natte cellen (`wet`) clusteren via ``wet_bonus``
-    (additief); daglicht-kamers (`daylight`) scoren ``daylight_bonus`` per
-    meter niet-rakende wand (blootgestelde perimeter — geen outline nodig).
-    Met ``bounds`` (x0, y0, x1, y1) blijft alles binnen de envelop (two-step);
-    zonder bounds vrij vlak. Deterministisch bij gelijke *seed*.
+    Elke kamer krijgt een vorm uit :func:`shape_for_area` (oriëntatie seeded;
+    binnen bounds beide oriëntaties) en de overlap-vrije positie met de meeste
+    gedeelde wand (partners tellen ``partner_bonus`` keer). Natte cellen (`wet`)
+    clusteren via ``wet_bonus`` (additief); daglicht-kamers (`daylight`) scoren
+    ``daylight_bonus`` per meter niet-rakende wand. Met ``bounds`` blijft alles
+    binnen de envelop (two-step); ``attractors`` trekt kamers met partners
+    buiten het blok naar de gedeelde blokrand (grens-coördinatie).
+    Deterministisch bij gelijke *seed*.
     """
     keys = [k for k in program.nodes if not program.nodes[k].exterior]
     for key in keys:
@@ -279,7 +282,7 @@ def propose_magnet(
     def score_of(
         cand: tuple[float, float, float, float], key: str, w: float, h: float
     ) -> float:
-        """Contact-score van een kandidaat (partners, nat, daglicht)."""
+        """Contact-score van een kandidaat (partners, nat, daglicht, attractor)."""
         shared_total = 0.0
         score = 0.0
         for okey, orect in rects.items():
@@ -293,6 +296,14 @@ def propose_magnet(
                 score += shared * wet_bonus
         if program.nodes[key].daylight:
             score += (2 * (w + h) - shared_total) * daylight_bonus
+        if attractors is not None and key in attractors and bounds is not None:
+            ax, ay = attractors[key]
+            cx, cy = (bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0
+            dx, dy = ax - cx, ay - cy
+            norm = (dx * dx + dy * dy) ** 0.5
+            if norm > 1e-9:
+                px, py = (cand[0] + cand[2]) / 2.0 - cx, (cand[1] + cand[3]) / 2.0 - cy
+                score += max(0.0, (px * dx + py * dy) / norm) * attract_bonus
         return score
 
     def free_inside(
@@ -322,7 +333,25 @@ def propose_magnet(
         if not rects:
             landscape = orientations[0]
             w, h = shape_for_area(area, max_aspect, landscape=landscape)
-            ox, oy = (bounds[0], bounds[1]) if bounds is not None else (0.0, 0.0)
+            if bounds is not None and attractors is not None and key in attractors:
+                ax, ay = attractors[key]
+                corners = [
+                    (bounds[0], bounds[1]),
+                    (bounds[2] - w, bounds[1]),
+                    (bounds[0], bounds[3] - h),
+                    (bounds[2] - w, bounds[3] - h),
+                ]
+                corners = [
+                    c
+                    for c in corners
+                    if c[0] >= bounds[0] - _TOL
+                    and c[1] >= bounds[1] - _TOL
+                    and c[0] + w <= bounds[2] + _TOL
+                    and c[1] + h <= bounds[3] + _TOL
+                ] or [(bounds[0], bounds[1])]
+                ox, oy = min(corners, key=lambda c: (c[0] - ax) ** 2 + (c[1] - ay) ** 2)
+            else:
+                ox, oy = (bounds[0], bounds[1]) if bounds is not None else (0.0, 0.0)
             rect = (ox, oy, ox + w, oy + h)
         else:
             best_rect: tuple[float, float, float, float] | None = None

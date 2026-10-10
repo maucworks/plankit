@@ -107,3 +107,23 @@ def test_two_step_intra_dwelling_doors_ok():
     r = conform(sd, _toy())
     assert "edge:w1-s1:door" in r.satisfied
     assert "edge:w2-s2:door" in r.satisfied
+
+
+def test_two_step_cross_block_door_at_shared_segment():
+    prog = RoomProgram(
+        nodes={
+            "w1": ProgramSpace(name="W1", area_min=15, group="A1"),
+            "s1": ProgramSpace(name="S1", area_min=10, group="A1"),
+            "gang": ProgramSpace(name="Gang", area_min=10, role="verkeer"),
+            "kern": ProgramSpace(name="Kern", area_min=8, role="verkeer", core=True),
+        },
+        edges=[
+            ProgramEdge("w1", "s1", kind="door"),
+            ProgramEdge("w1", "gang", kind="door"),
+            ProgramEdge("gang", "kern", kind="door"),
+        ],
+    )
+    proposal, issues = two_step(prog, seed=0)
+    assert issues == []
+    r = conform(generate(prog, proposal=proposal), prog)
+    assert "edge:w1-gang:door" in r.satisfied

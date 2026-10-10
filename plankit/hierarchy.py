@@ -122,6 +122,31 @@ def _side_origins(bbox: Rect, side: str, w: float, h: float, step: float = 0.5):
             t += step
 
 
+def _shared_segments(blocks: dict[str, Rect]) -> dict[tuple[str, str], tuple[float, float]]:
+    """Middens van gedeelde blokranden (langste per paar), beide richtingen."""
+    out: dict[tuple[str, str], tuple[float, float]] = {}
+    keys = list(blocks)
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            a, b = blocks[keys[i]], blocks[keys[j]]
+            cands: list[tuple[float, tuple[float, float]]] = []
+            if abs(a[2] - b[0]) <= 1e-9 or abs(b[2] - a[0]) <= 1e-9:
+                lo, hi = max(a[1], b[1]), min(a[3], b[3])
+                if hi - lo > 1e-9:
+                    x = a[2] if abs(a[2] - b[0]) <= 1e-9 else b[2]
+                    cands.append((hi - lo, (x, (lo + hi) / 2.0)))
+            if abs(a[3] - b[1]) <= 1e-9 or abs(b[3] - a[1]) <= 1e-9:
+                lo, hi = max(a[0], b[0]), min(a[2], b[2])
+                if hi - lo > 1e-9:
+                    y = a[3] if abs(a[3] - b[1]) <= 1e-9 else b[3]
+                    cands.append((hi - lo, ((lo + hi) / 2.0, y)))
+            if cands:
+                cands.sort()
+                out[(keys[i], keys[j])] = cands[-1][1]
+                out[(keys[j], keys[i])] = cands[-1][1]
+    return out
+
+
 def coarse_open_kern(program: RoomProgram, seed: int = 0) -> dict[str, Rect]:
     """Leg superknopen concentrisch: kern centraal, verkeer eromheen, dan woningen.
 
@@ -207,11 +232,34 @@ def two_step(
     """
     blocks = coarse_layout(program, topology=topology, seed=seed)
     members = supernodes(program)
+    segments = _shared_segments(blocks)
+    room_super = {k: s for s, keys in members.items() for k in keys}
+    attractors: dict[str, tuple[float, float]] = {}
+    for edge in program.edges:
+        if edge.kind not in ("door", "wall"):
+            continue
+        for a, b in ((edge.a, edge.b), (edge.b, edge.a)):
+            sa, sb = room_super.get(a), room_super.get(b)
+            if sa is None or sb is None or sa == sb:
+                continue
+            mid = segments.get((sa, sb))
+            if mid is not None:
+                attractors.setdefault(a, []).append(mid)
+    attractors = {
+        k: (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+        for k, pts in attractors.items()
+    }
     proposal: dict[str, list[Vec]] = {}
     issues: list[str] = []
     for superkey, block in blocks.items():
         room_keys = members[superkey]
-        fine = propose_magnet(_sub_program(program, room_keys), seed=seed, bounds=block)
+        sub_attractors = {k: attractors[k] for k in room_keys if k in attractors}
+        fine = propose_magnet(
+            _sub_program(program, room_keys),
+            seed=seed,
+            bounds=block,
+            attractors=sub_attractors,
+        )
         for key, pts in fine.items():
             proposal[key] = pts
             mxs = [p.x for p in pts]

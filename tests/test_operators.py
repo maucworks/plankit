@@ -289,3 +289,10 @@ def test_propose_magnet_flags_keep_determinism():
     assert {k: [(p.x, p.y) for p in v] for k, v in a.items()} == {
         k: [(p.x, p.y) for p in v] for k, v in b.items()
     }
+
+
+def test_propose_magnet_first_room_to_attractor_corner():
+    prog = RoomProgram(nodes={"w": ProgramSpace(name="W", area_min=6)}, edges=[])
+    out = propose_magnet(prog, seed=0, bounds=(0.0, 0.0, 10.0, 10.0), attractors={"w": (5.0, 10.0)})
+    box = _bbox(out["w"])
+    assert box[3] == pytest.approx(10.0)  # raakt de bovenrand bij de attractor
