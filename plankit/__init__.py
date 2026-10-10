@@ -21,6 +21,12 @@ from plankit.analysis import (
     relative_asymmetry,
     total_depth,
 )
+from plankit.circulation import (
+    BackboneLink,
+    CorridorBackbone,
+    corridor_backbone,
+    corridor_filter,
+)
 from plankit.conform import (
     CirculationReport,
     ConformanceReport,
@@ -165,4 +171,8 @@ __all__ = [
     "connectivity",
     "control",
     "choice",
+    "corridor_backbone",
+    "corridor_filter",
+    "BackboneLink",
+    "CorridorBackbone",
 ]
