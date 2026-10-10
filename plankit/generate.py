@@ -9,9 +9,11 @@ verkeersstrategie) met dezelfde interface.
 
 from __future__ import annotations
 
+from plankit.conform import ConformanceReport, conform
 from plankit.operators import layout_row, propose_magnet
 from plankit.planar import PlanarSubdivision
 from plankit.program import RoomProgram
+from plankit.quality import adjacency_gaps, fill_ratio
 
 _EPS = 1e-6
 
@@ -35,19 +37,23 @@ def propose_layout(program: RoomProgram, depth: float = 4.0) -> dict:
 
 
 def generate(
-    program: RoomProgram, proposal: dict | None = None, strategy: str = "row"
+    program: RoomProgram,
+    proposal: dict | None = None,
+    strategy: str = "row",
+    seed: int = 0,
 ) -> PlanarSubdivision:
     """Bouw het skelet uit het PvE.
 
     ``proposal`` is ``{room_key: [punten...]}`` (rechthoeken). Zonder proposal
-    bepaalt ``strategy`` het voorstel: ``"row"`` (strip, default) of
-    ``"magnet"`` (contact-gedreven compositie). ``door``-kanten uit het PvE
-    worden op de gedeelde edges gemarkeerd; paren zonder gedeelde edge worden
-    overgeslagen (zie :func:`plankit.conform.conform` voor rapportage).
+    bepaalt ``strategy`` het voorstel: ``"row"`` (strip, default; negeert
+    ``seed``) of ``"magnet"`` (contact-gedreven compositie met ``seed``).
+    ``door``-kanten uit het PvE worden op de gedeelde edges gemarkeerd; paren
+    zonder gedeelde edge worden overgeslagen (zie
+    :func:`plankit.conform.conform` voor rapportage).
     """
     if proposal is None:
         if strategy == "magnet":
-            proposal = propose_magnet(program)
+            proposal = propose_magnet(program, seed=seed)
         elif strategy == "row":
             proposal = propose_layout(program)
         else:
@@ -89,3 +95,49 @@ def generate(
         if fa is not None and fb is not None and sd.shared_edge(fa, fb) is not None:
             sd.mark_edge(fa, fb, "door")
     return sd
+
+
+def select_best(
+    program: RoomProgram,
+    sds: list[PlanarSubdivision],
+    boundary: list[tuple[float, float]] | None = None,
+) -> int:
+    """Index van het beste skelet: eerst `conform.ok`, dan minste violations,
+    dan minste missing, dan kleinste adjacency-gaps-som (MFP-T), dan hoogste
+    fill_ratio (MFP-G; alleen met boundary). Deterministisch (eerste bij gelijk).
+    """
+    if not sds:
+        raise ValueError("select_best: geen varianten om uit te kiezen")
+    best, best_key = 0, None
+    for i, sd in enumerate(sds):
+        report = conform(sd, program)
+        gaps = sum(adjacency_gaps(sd, program).values())
+        fill = fill_ratio(sd, boundary) if boundary is not None else 0.0
+        key = (report.ok, -len(report.violated), -len(report.missing), -gaps, fill)
+        if best_key is None or key > best_key:
+            best_key, best = key, i
+    return best
+
+
+def generate_many(
+    program: RoomProgram,
+    strategy: str = "magnet",
+    seeds: range = range(10),
+    store=None,
+) -> tuple[PlanarSubdivision, ConformanceReport]:
+    """Genereer per seed een variant, bewaar alle in de store, geef de beste terug.
+
+    Labels als ``"{strategy}/s{seed}"`` (roots, parent_id None). Geeft
+    ``(skelet, ConformanceReport)`` van de winnaar volgens :func:`select_best`.
+    Zonder store alleen genereren + selecteren.
+    """
+    sds: list[PlanarSubdivision] = []
+    for n, seed in enumerate(seeds):
+        sd = generate(program, strategy=strategy, seed=seed)
+        sds.append(sd)
+        if store is not None:
+            from plankit.store import make_variant
+
+            store.add(make_variant(sd, program, step=n, label=f"{strategy}/s{seed}"))
+    best = select_best(program, sds)
+    return sds[best], conform(sds[best], program)

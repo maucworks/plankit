@@ -6,7 +6,7 @@ import pytest
 from plankit import Graph, ProgramEdge, ProgramSpace, RoomProgram
 from plankit.constraints import program_constraints
 from plankit.derive import door_pairs, space_adjacency
-from plankit.generate import generate, propose_layout
+from plankit.generate import generate, generate_many, propose_layout, select_best
 
 
 def _two_room_program() -> RoomProgram:
@@ -70,6 +70,72 @@ def test_generate_default_strategy_still_row():
 def test_generate_unknown_strategy():
     with pytest.raises(ValueError):
         generate(_two_room_program(), strategy="nonsense")
+
+
+def test_generate_seed_deterministic_and_row_ignores_seed():
+    prog = _two_room_program()
+    a = generate(prog, strategy="magnet", seed=3)
+    b = generate(prog, strategy="magnet", seed=3)
+    assert [f.label for f in a.faces] == [f.label for f in b.faces]
+    r1 = generate(prog, strategy="row", seed=1)
+    r2 = generate(prog, strategy="row", seed=9)
+    assert [(f.label, r1.face_area(i)) for i, f in enumerate(r1.faces)] == [
+        (f.label, r2.face_area(i)) for i, f in enumerate(r2.faces)
+    ]
+
+
+def test_select_best_prefers_ok():
+    prog = _two_room_program()
+    good = generate(prog, strategy="magnet", seed=0)
+    bad_prop = {
+        "k": [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)],
+        "w": [(10.0, 0.0), (15.0, 0.0), (15.0, 4.0), (10.0, 4.0)],
+    }
+    bad = generate(prog, proposal=bad_prop)
+    assert select_best(prog, [bad, good]) == 1
+    assert select_best(prog, [good, bad]) == 0
+
+
+def test_select_best_fewer_violations_then_smaller_gaps():
+    prog = RoomProgram(
+        nodes={
+            "k": ProgramSpace(name="K", area_min=8),
+            "w": ProgramSpace(name="W", area_min=20),
+        },
+        edges=[ProgramEdge("k", "w", kind="wall")],
+    )
+    near = generate(
+        prog,
+        proposal={
+            "k": [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)],
+            "w": [(6.0, 0.0), (11.0, 0.0), (11.0, 4.0), (6.0, 4.0)],
+        },
+    )
+    far = generate(
+        prog,
+        proposal={
+            "k": [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)],
+            "w": [(9.0, 0.0), (14.0, 0.0), (14.0, 4.0), (9.0, 4.0)],
+        },
+    )
+    assert select_best(prog, [far, near]) == 1
+
+
+def test_select_best_empty_raises():
+    with pytest.raises(ValueError):
+        select_best(_two_room_program(), [])
+
+
+def test_generate_many_stores_and_returns_best():
+    from plankit.store import VariantStore
+
+    store = VariantStore()
+    sd, report = generate_many(_two_room_program(), strategy="magnet", seeds=range(3), store=store)
+    assert report.ok
+    assert len(store.all()) == 3
+    assert sorted(v.label for v in store.all()) == ["magnet/s0", "magnet/s1", "magnet/s2"]
+    assert all(v.parent_id is None for v in store.all())
+    assert sd is not None
 
 
 def test_generate_skips_door_without_shared_edge():

@@ -31,7 +31,7 @@ from plankit.conform import (
 from plankit.constraints import Constraint, program_constraints
 from plankit.derive import door_pairs, perimeter_spaces, space_adjacency, space_footprints
 from plankit.events import evaluate
-from plankit.generate import generate, propose_layout
+from plankit.generate import generate, generate_many, propose_layout, select_best
 from plankit.geometry import Vec
 from plankit.graph import Graph
 from plankit.hierarchy import (
@@ -95,6 +95,8 @@ __all__ = [
     "door_pairs",
     # generatie
     "generate",
+    "generate_many",
+    "select_best",
     "propose_layout",
     "propose_magnet",
     "place_space",
