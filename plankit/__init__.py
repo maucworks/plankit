@@ -26,6 +26,8 @@ from plankit.circulation import (
     CorridorBackbone,
     corridor_backbone,
     corridor_filter,
+    propose_doors,
+    redundant_doors,
 )
 from plankit.conform import (
     CirculationReport,
@@ -173,6 +175,8 @@ __all__ = [
     "choice",
     "corridor_backbone",
     "corridor_filter",
+    "propose_doors",
+    "redundant_doors",
     "BackboneLink",
     "CorridorBackbone",
 ]

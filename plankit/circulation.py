@@ -118,3 +118,94 @@ def corridor_filter(
         link.length >= min_length - 1e-9 for link in backbone.links
     )
     return ok, fraction
+
+
+def _shared_walls(sd: PlanarSubdivision) -> dict[tuple[int, int], float]:
+    """Gedeelde wandlengte per face-paar (langste wint bij meerdere stukken)."""
+    ext = sd.exterior_face()
+    out: dict[tuple[int, int], float] = {}
+    for he_id, he in enumerate(sd.half_edges):
+        if he_id > he.twin:
+            continue
+        twin = sd.half_edges[he.twin]
+        if he.face == ext or twin.face == ext:
+            continue
+        a = sd.vertices[he.origin]
+        b = sd.vertices[sd.half_edges[he.next].origin]
+        length = ((b.x - a.x) ** 2 + (b.y - a.y) ** 2) ** 0.5
+        key = (min(he.face, twin.face), max(he.face, twin.face))
+        out[key] = max(out.get(key, 0.0), length)
+    return out
+
+
+def _door_pairs(sd: PlanarSubdivision) -> list[tuple[int, int]]:
+    """Deur-paren als int-tuples (intern; vgl. derive.door_pairs)."""
+    from plankit.derive import door_pairs
+
+    return [(int(a), int(b)) for a, b in door_pairs(sd)]
+
+
+def propose_doors(sd: PlanarSubdivision) -> list[tuple[int, int]]:
+    """Stel deur-markeringen voor tot alles via deuren bereikbaar is (HWFC-lijn).
+
+    Verbindt componenten greedily over de langste gedeelde wand (deterministisch).
+    Alleen tussen rakende ruimten — door de lucht wordt niets voorgesteld.
+    """
+    walls = _shared_walls(sd)
+    parent: dict[int, int] = {}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for fid in sd.bounded_faces():
+        parent[fid] = fid
+    for a, b in _door_pairs(sd):
+        parent[find(a)] = find(b)
+    proposals: list[tuple[int, int]] = []
+    while True:
+        cands = sorted(
+            ((length, pair) for pair, length in walls.items()
+             if find(pair[0]) != find(pair[1])),
+            key=lambda t: (-t[0], t[1]),
+        )
+        if not cands:
+            break
+        _, pair = cands[0]
+        proposals.append(pair)
+        parent[find(pair[0])] = find(pair[1])
+    return proposals
+
+
+def redundant_doors(sd: PlanarSubdivision) -> list[tuple[int, int]]:
+    """Deuren die individueel overbodig zijn (zonder hen blijft alles bereikbaar)."""
+    pairs = _door_pairs(sd)
+    adj: dict[int, set[int]] = {fid: set() for fid in sd.bounded_faces()}
+    for a, b in pairs:
+        adj[a].add(b)
+        adj[b].add(a)
+
+    def connected_without(skip: tuple[int, int]) -> bool:
+        seen: set[int] = set()
+        fids = sorted(adj)
+        if not fids:
+            return True
+        stack = [fids[0]]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            for nbr in adj[cur]:
+                if {cur, nbr} == set(skip) or nbr in seen:
+                    continue
+                stack.append(nbr)
+        return seen == set(fids)
+
+    out = []
+    for a, b in sorted((min(x, y), max(x, y)) for x, y in pairs):
+        if connected_without((a, b)):
+            out.append((a, b))
+    return out

@@ -1,7 +1,12 @@
 # This file was generated with the assistance of an AI coding tool.
 """Tests voor gang-backbone (plankit.circulation)."""
 
-from plankit.circulation import corridor_backbone, corridor_filter
+from plankit.circulation import (
+    corridor_backbone,
+    corridor_filter,
+    propose_doors,
+    redundant_doors,
+)
 from plankit.planar import PlanarSubdivision
 
 
@@ -46,3 +51,36 @@ def test_filter_accepts_and_rejects():
     assert not ok2
     ok3, _ = corridor_filter(_chain3(), bb, min_length=5.0)
     assert not ok3
+
+
+def _chain3_one_door():
+    sd = _chain3()
+    sd.mark_edge(0, 1, "door")
+    return sd
+
+
+def test_propose_doors_connects_isolated():
+    sd = _chain3_one_door()
+    assert propose_doors(sd) == [(1, 2)]
+    sd.mark_edge(1, 2, "door")
+    assert propose_doors(sd) == []
+
+
+def test_redundant_doors_cycle_and_bridge():
+    sd = _chain3()
+    sd.mark_edge(0, 1, "door")
+    sd.mark_edge(1, 2, "door")
+    assert redundant_doors(sd) == []  # keten: beide bruggen
+    sd2 = PlanarSubdivision.from_faces(
+        [
+            [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+            [(4.0, 0.0), (8.0, 0.0), (8.0, 4.0), (4.0, 4.0)],
+            [(0.0, 4.0), (4.0, 4.0), (4.0, 8.0), (0.0, 8.0)],
+            [(4.0, 4.0), (8.0, 4.0), (8.0, 8.0), (4.0, 8.0)],
+        ]
+    )
+    sd2.mark_edge(0, 1, "door")
+    sd2.mark_edge(1, 3, "door")
+    sd2.mark_edge(3, 2, "door")
+    sd2.mark_edge(2, 0, "door")
+    assert redundant_doors(sd2) == [(0, 1), (0, 2), (1, 3), (2, 3)]
