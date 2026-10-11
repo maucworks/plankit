@@ -534,8 +534,9 @@ def move_toward(
     """Schuif kamer *key* naar *target* tot raken (plus *extra* overlap); puur.
 
     Hoofdas = grootste bbox-tussenruimte (daar raken); nevensaansluiting =
-    intervallen overlappend uitlijnen. Stopt bij het eerste obstakel (geen
-    overlap met derden). Al rakend → ongewijzigd terug.
+    alleen uitlijnen bij ontbrekende overlap (bestaande overlap behouden).
+    Stopt bij het eerste obstakel (geen overlap met derden). Al rakend →
+    ongewijzigd terug.
     """
     if key not in proposal:
         raise KeyError(f"move_toward: onbekende knoop {key!r}")
@@ -549,10 +550,10 @@ def move_toward(
         return {k: list(pts) for k, pts in proposal.items()}
     if dx_gap >= dy_gap:
         dx = (bx1 - ax0 - extra) if ax0 >= bx1 - 1e-9 else -(ax1 - bx0 - extra)
-        dy = (by0 + by1) / 2.0 - (ay0 + ay1) / 2.0
+        dy = 0.0 if dy_gap <= 0 else (by0 + by1) / 2.0 - (ay0 + ay1) / 2.0
     else:
         dy = (by1 - ay0 - extra) if ay0 >= by1 - 1e-9 else -(ay1 - by0 - extra)
-        dx = (bx0 + bx1) / 2.0 - (ax0 + ax1) / 2.0
+        dx = 0.0 if dx_gap <= 0 else (bx0 + bx1) / 2.0 - (ax0 + ax1) / 2.0
     others = [proposal[k] for k in proposal if k not in (key, target)]
     step_dx, step_dy = dx / 8.0, dy / 8.0
     best = (0.0, 0.0)

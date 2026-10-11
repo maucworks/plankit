@@ -398,3 +398,15 @@ def test_move_toward_touches():
     assert max(xs) == pytest.approx(10.0)  # rechterrand tegen b
     again = move_toward(out, "a", "b")
     assert [(p.x, p.y) for p in again["a"]] == [(p.x, p.y) for p in out["a"]]
+
+
+def test_move_toward_keeps_overlap_axis():
+    prop = {
+        "a": [Vec(0.0, 0.0), Vec(4.0, 0.0), Vec(4.0, 3.0), Vec(0.0, 3.0)],
+        "b": [Vec(5.5, 1.0), Vec(7.5, 1.0), Vec(7.5, 4.0), Vec(5.5, 4.0)],
+    }
+    out = move_toward(prop, "a", "b")
+    bxs = [p.x for p in out["a"]]
+    bys = [p.y for p in out["a"]]
+    assert max(bxs) == pytest.approx(5.5)  # raakt, zonder y-verschuiving
+    assert min(bys) == pytest.approx(0.0)
