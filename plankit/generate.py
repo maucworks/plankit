@@ -102,6 +102,7 @@ def select_best(
     program: RoomProgram,
     sds: list[PlanarSubdivision],
     boundary: list[tuple[float, float]] | None = None,
+    min_widths: dict[str, float] | None = None,
 ) -> int:
     """Index van het beste skelet: eerst `conform.ok`, dan minste violations,
     dan minste missing, dan kleinste adjacency-gaps-som (MFP-T), dan hoogste
@@ -111,7 +112,7 @@ def select_best(
         raise ValueError("select_best: geen varianten om uit te kiezen")
     best, best_key = 0, None
     for i, sd in enumerate(sds):
-        report = conform(sd, program)
+        report = conform(sd, program, boundary=boundary, min_widths=min_widths)
         gaps = sum(adjacency_gaps(sd, program).values())
         fill = fill_ratio(sd, boundary) if boundary is not None else 0.0
         key = (report.ok, -len(report.violated), -len(report.missing), -gaps, fill)
@@ -126,6 +127,7 @@ def generate_many(
     seeds: range = range(10),
     store=None,
     min_widths: dict[str, float] | None = None,
+    boundary: list[tuple[float, float]] | None = None,
 ) -> tuple[PlanarSubdivision, ConformanceReport]:
     """Genereer per seed een variant, bewaar alle in de store, geef de beste terug.
 
@@ -141,5 +143,57 @@ def generate_many(
             from plankit.store import make_variant
 
             store.add(make_variant(sd, program, step=n, label=f"{strategy}/s{seed}"))
-    best = select_best(program, sds)
-    return sds[best], conform(sds[best], program)
+    best = select_best(program, sds, boundary=boundary, min_widths=min_widths)
+    return sds[best], conform(sds[best], program, boundary=boundary, min_widths=min_widths)
+
+
+def revise(
+    program: RoomProgram,
+    proposal: dict,
+    rounds: int = 3,
+    boundary: list[tuple[float, float]] | None = None,
+    min_widths: dict[str, float] | None = None,
+) -> tuple[dict, ConformanceReport]:
+    """Revise-lus (mechanisch): repareer violated deur/`wall`-kanten per mutatie.
+
+    Per ronde: voor elke geschonden vereiste kant de kamer naar de partner
+    schuiven (`move_toward`) plus het paar swappen; alles genereren en met
+    :func:`select_best` kiezen. Monotoon: nooit slechter dan de invoer.
+    Geeft (voorstel, rapport) van de winnaar.
+    """
+    from plankit.operators import move_toward, swap_rooms
+
+    best_prop = {k: list(v) for k, v in proposal.items()}
+    best_sd = generate(program, proposal=best_prop)
+    best_report = conform(best_sd, program, boundary=boundary, min_widths=min_widths)
+    keys = set(best_prop)
+    for _ in range(rounds):
+        cands: list[dict] = [best_prop]
+        violated = [v for v in best_report.violated if ":door" in v or ":wall" in v]
+        for label in violated:
+            parts = label.split(":")
+            if len(parts) != 3:
+                continue
+            _, pair, _ = parts
+            found = None
+            for a in keys:
+                if pair.startswith(a + "-") and pair[len(a) + 1 :] in keys:
+                    found = (a, pair[len(a) + 1 :])
+                    break
+                if pair.endswith("-" + a) and pair[: -(len(a) + 1)] in keys:
+                    found = (pair[: -(len(a) + 1)], a)
+                    break
+            if found is None:
+                continue
+            a, b = found
+            cands.append(move_toward(best_prop, a, b))
+            cands.append(move_toward(best_prop, b, a))
+            cands.append(swap_rooms(best_prop, a, b))
+        sds = [generate(program, proposal=c) for c in cands]
+        idx = select_best(program, sds, boundary=boundary, min_widths=min_widths)
+        best_prop = cands[idx]
+        best_sd = sds[idx]
+        best_report = conform(best_sd, program, boundary=boundary, min_widths=min_widths)
+        if best_report.ok:
+            break
+    return best_prop, best_report

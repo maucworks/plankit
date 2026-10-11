@@ -9,12 +9,15 @@ from plankit.operators import (
     add_room,
     layout_row,
     mirror_footprint,
+    move_room,
+    move_toward,
     place_space,
     propose_magnet,
     remove_room,
     shape_for_area,
     split_footprint,
     squarify_rects,
+    swap_rooms,
 )
 
 
@@ -361,3 +364,37 @@ def test_squarify_rects_deterministic_and_rejects():
         squarify_rects([("a", 0.0)], (0.0, 0.0, 5.0, 3.0))
     with pytest.raises(ValueError):
         squarify_rects([("a", -2.0)], (0.0, 0.0, 5.0, 3.0))
+
+
+def _two_rects():
+    return {
+        "a": [Vec(0.0, 0.0), Vec(4.0, 0.0), Vec(4.0, 3.0), Vec(0.0, 3.0)],
+        "b": [Vec(10.0, 0.0), Vec(14.0, 0.0), Vec(14.0, 3.0), Vec(10.0, 3.0)],
+    }
+
+
+def test_move_room_translates_and_keeps_input():
+    prop = _two_rects()
+    out = move_room(prop, "a", 2.0, -1.0)
+    assert [(p.x, p.y) for p in out["a"]] == [(2.0, -1.0), (6.0, -1.0), (6.0, 2.0), (2.0, 2.0)]
+    assert prop["a"][0].x == 0.0  # invoer ongewijzigd
+    with pytest.raises(KeyError):
+        move_room(prop, "zzz", 1.0, 0.0)
+
+
+def test_swap_rooms_exchanges_origins():
+    prop = _two_rects()
+    out = swap_rooms(prop, "a", "b")
+    assert [(p.x, p.y) for p in out["a"]] == [(10.0, 0.0), (14.0, 0.0), (14.0, 3.0), (10.0, 3.0)]
+    assert [(p.x, p.y) for p in out["b"]] == [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)]
+    with pytest.raises(KeyError):
+        swap_rooms(prop, "a", "zzz")
+
+
+def test_move_toward_touches():
+    prop = _two_rects()
+    out = move_toward(prop, "a", "b")
+    xs = [p.x for p in out["a"]]
+    assert max(xs) == pytest.approx(10.0)  # rechterrand tegen b
+    again = move_toward(out, "a", "b")
+    assert [(p.x, p.y) for p in again["a"]] == [(p.x, p.y) for p in out["a"]]

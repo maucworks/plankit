@@ -473,3 +473,106 @@ def squarify_rects(
     if row:
         layout(row)
     return out
+
+
+def _bbox_of(pts: list) -> tuple[float, float, float, float]:
+    """Bounding box van een puntenlijst (Vec of tuple)."""
+    xs = [_xy(p)[0] for p in pts]
+    ys = [_xy(p)[1] for p in pts]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _xy(p) -> tuple[float, float]:
+    """Coördinaten uit Vec of tuple."""
+    if hasattr(p, "x"):
+        return (p.x, p.y)
+    return (p[0], p[1])
+
+
+def move_room(
+    proposal: dict[str, list[Vec]], key: str, dx: float, dy: float
+) -> dict[str, list[Vec]]:
+    """Transleer één kamer; puur (invoer ongewijzigd). Accepteert Vec/tuple."""
+    if key not in proposal:
+        raise KeyError(f"move_room: onbekende knoop {key!r}")
+    out: dict[str, list[Vec]] = {}
+    for k, pts in proposal.items():
+        if k == key:
+            out[k] = [Vec(_xy(p)[0] + dx, _xy(p)[1] + dy) for p in pts]
+        else:
+            out[k] = [Vec(_xy(p)[0], _xy(p)[1]) for p in pts]
+    return out
+
+
+def swap_rooms(
+    proposal: dict[str, list[Vec]], a: str, b: str
+) -> dict[str, list[Vec]]:
+    """Wissel de oorsprong van twee kamers (eigen maat behouden); puur."""
+    for key in (a, b):
+        if key not in proposal:
+            raise KeyError(f"swap_rooms: onbekende knoop {key!r}")
+    out: dict[str, list[Vec]] = {}
+    for key, pts in proposal.items():
+        if key == a:
+            base = proposal[b]
+        elif key == b:
+            base = proposal[a]
+        else:
+            out[key] = [Vec(_xy(p)[0], _xy(p)[1]) for p in pts]
+            continue
+        w = max(_xy(p)[0] for p in pts) - min(_xy(p)[0] for p in pts)
+        h = max(_xy(p)[1] for p in pts) - min(_xy(p)[1] for p in pts)
+        ox = min(_xy(p)[0] for p in base)
+        oy = min(_xy(p)[1] for p in base)
+        out[key] = [Vec(ox, oy), Vec(ox + w, oy), Vec(ox + w, oy + h), Vec(ox, oy + h)]
+    return out
+
+
+def move_toward(
+    proposal: dict[str, list[Vec]], key: str, target: str, extra: float = 0.0
+) -> dict[str, list[Vec]]:
+    """Schuif kamer *key* naar *target* tot raken (plus *extra* overlap); puur.
+
+    Hoofdas = grootste bbox-tussenruimte (daar raken); nevensaansluiting =
+    intervallen overlappend uitlijnen. Stopt bij het eerste obstakel (geen
+    overlap met derden). Al rakend → ongewijzigd terug.
+    """
+    if key not in proposal:
+        raise KeyError(f"move_toward: onbekende knoop {key!r}")
+    if target not in proposal:
+        raise KeyError(f"move_toward: onbekend doel {target!r}")
+    ax0, ay0, ax1, ay1 = _bbox_of(proposal[key])
+    bx0, by0, bx1, by1 = _bbox_of(proposal[target])
+    dx_gap = max(0.0, ax0 - bx1, bx0 - ax1)
+    dy_gap = max(0.0, ay0 - by1, by0 - ay1)
+    if dx_gap <= 0 and dy_gap <= 0:
+        return {k: list(pts) for k, pts in proposal.items()}
+    if dx_gap >= dy_gap:
+        dx = (bx1 - ax0 - extra) if ax0 >= bx1 - 1e-9 else -(ax1 - bx0 - extra)
+        dy = (by0 + by1) / 2.0 - (ay0 + ay1) / 2.0
+    else:
+        dy = (by1 - ay0 - extra) if ay0 >= by1 - 1e-9 else -(ay1 - by0 - extra)
+        dx = (bx0 + bx1) / 2.0 - (ax0 + ax1) / 2.0
+    others = [proposal[k] for k in proposal if k not in (key, target)]
+    step_dx, step_dy = dx / 8.0, dy / 8.0
+    best = (0.0, 0.0)
+    for i in range(1, 9):
+        cand = (ax0 + step_dx * i, ay0 + step_dy * i, ax1 + step_dx * i, ay1 + step_dy * i)
+        blocked = False
+        for pts in others:
+            ox0 = min(_xy(p)[0] for p in pts)
+            oy0 = min(_xy(p)[1] for p in pts)
+            ox1 = max(_xy(p)[0] for p in pts)
+            oy1 = max(_xy(p)[1] for p in pts)
+            if not (
+                cand[2] <= ox0 + 1e-9
+                or cand[0] >= ox1 - 1e-9
+                or cand[3] <= oy0 + 1e-9
+                or cand[1] >= oy1 - 1e-9
+            ):
+                blocked = True
+                break
+        if blocked:
+            break
+        best = (step_dx * i, step_dy * i)
+    return move_room(proposal, key, *best)

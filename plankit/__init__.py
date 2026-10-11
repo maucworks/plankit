@@ -46,7 +46,7 @@ from plankit.derive import (
     wall_segments,
 )
 from plankit.events import evaluate
-from plankit.generate import generate, generate_many, propose_layout, select_best
+from plankit.generate import generate, generate_many, propose_layout, revise, select_best
 from plankit.geometry import Vec
 from plankit.graph import Graph
 from plankit.hierarchy import (
@@ -64,12 +64,15 @@ from plankit.operators import (
     add_room,
     layout_row,
     mirror_footprint,
+    move_room,
+    move_toward,
     place_space,
     propose_magnet,
     remove_room,
     shape_for_area,
     split_footprint,
     squarify_rects,
+    swap_rooms,
 )
 from plankit.planar import Face, HalfEdge, PlanarSubdivision, Vertex
 from plankit.program import (
@@ -120,9 +123,13 @@ __all__ = [
     "generate",
     "generate_many",
     "select_best",
+    "revise",
     "propose_layout",
     "propose_magnet",
     "place_space",
+    "move_room",
+    "move_toward",
+    "swap_rooms",
     "shape_for_area",
     "squarify_rects",
     "split_footprint",

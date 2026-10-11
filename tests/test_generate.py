@@ -6,7 +6,7 @@ import pytest
 from plankit import Graph, ProgramEdge, ProgramSpace, RoomProgram
 from plankit.constraints import program_constraints
 from plankit.derive import door_pairs, space_adjacency
-from plankit.generate import generate, generate_many, propose_layout, select_best
+from plankit.generate import generate, generate_many, propose_layout, revise, select_best
 
 
 def _two_room_program() -> RoomProgram:
@@ -146,6 +146,34 @@ def test_generate_magnet_min_widths_conform():
     sd = generate(prog, strategy="magnet", seed=0, min_widths=widths)
     r = conform(sd, prog, min_widths=widths)
     assert r.ok
+
+
+def test_revise_fixes_separated_rooms():
+    from plankit.conform import conform
+
+    prog = _two_room_program()
+    proposal = {
+        "k": [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)],
+        "w": [(10.0, 0.0), (15.0, 0.0), (15.0, 4.0), (10.0, 4.0)],
+    }
+    before = conform(generate(prog, proposal=proposal), prog)
+    assert not before.ok
+    _, after = revise(prog, proposal, rounds=2)
+    assert after.ok
+    assert len(after.violated) <= len(before.violated)
+
+
+def test_revise_never_worsens():
+    from plankit.conform import conform
+
+    prog = _two_room_program()
+    proposal = {
+        "k": [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)],
+        "w": [(4.0, 0.0), (9.0, 0.0), (9.0, 4.0), (4.0, 4.0)],
+    }
+    before = conform(generate(prog, proposal=proposal), prog)
+    _, after = revise(prog, proposal, rounds=2)
+    assert len(after.violated) <= len(before.violated)
 
 
 def test_generate_skips_door_without_shared_edge():
