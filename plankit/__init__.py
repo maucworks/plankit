@@ -21,6 +21,14 @@ from plankit.analysis import (
     relative_asymmetry,
     total_depth,
 )
+from plankit.circulation import (
+    BackboneLink,
+    CorridorBackbone,
+    corridor_backbone,
+    corridor_filter,
+    propose_doors,
+    redundant_doors,
+)
 from plankit.conform import (
     CirculationReport,
     ConformanceReport,
@@ -29,22 +37,62 @@ from plankit.conform import (
     validate_circulation,
 )
 from plankit.constraints import Constraint, program_constraints
-from plankit.derive import door_pairs, perimeter_spaces, space_adjacency, space_footprints
+from plankit.derive import (
+    WallSegment,
+    door_pairs,
+    perimeter_spaces,
+    space_adjacency,
+    space_footprints,
+    wall_segments,
+)
 from plankit.events import evaluate
-from plankit.generate import generate, propose_layout
+from plankit.generate import generate, generate_many, propose_layout, revise, select_best
 from plankit.geometry import Vec
 from plankit.graph import Graph
+from plankit.hierarchy import (
+    TOPOLOGIES,
+    DwellingEnvelope,
+    coarse_layout,
+    dwelling_envelope,
+    skyline_coarse,
+    squarify_blocks,
+    supernodes,
+    topology_coarse,
+    two_step,
+)
 from plankit.operators import (
     add_room,
     layout_row,
     mirror_footprint,
+    move_room,
+    move_toward,
     place_space,
+    propose_magnet,
     remove_room,
+    shape_for_area,
     split_footprint,
+    squarify_rects,
+    swap_rooms,
 )
 from plankit.planar import Face, HalfEdge, PlanarSubdivision, Vertex
-from plankit.program import EDGE_KINDS, SPACE_ROLES, ProgramEdge, ProgramSpace, RoomProgram
-from plankit.quality import aspect_ratios, circulation_depth, facade_lengths, is_enfilade
+from plankit.program import (
+    EDGE_KINDS,
+    SPACE_ROLES,
+    ProgramEdge,
+    ProgramSpace,
+    RoomProgram,
+    dwelling_budget,
+)
+from plankit.quality import (
+    adjacency_gaps,
+    aspect_ratios,
+    circulation_depth,
+    escape_depth,
+    facade_lengths,
+    facade_ratio,
+    fill_ratio,
+    is_enfilade,
+)
 from plankit.store import Variant, VariantStore, make_variant
 from plankit.svg import scrub_page, to_svg
 
@@ -54,6 +102,7 @@ __all__ = [
     "RoomProgram",
     "ProgramSpace",
     "ProgramEdge",
+    "dwelling_budget",
     "EDGE_KINDS",
     "SPACE_ROLES",
     # geometrie
@@ -68,15 +117,36 @@ __all__ = [
     "perimeter_spaces",
     "space_footprints",
     "door_pairs",
+    "wall_segments",
+    "WallSegment",
     # generatie
     "generate",
+    "generate_many",
+    "select_best",
+    "revise",
     "propose_layout",
+    "propose_magnet",
     "place_space",
+    "move_room",
+    "move_toward",
+    "swap_rooms",
+    "shape_for_area",
+    "squarify_rects",
     "split_footprint",
     "mirror_footprint",
     "add_room",
     "remove_room",
     "layout_row",
+    # hiërarchie (two-step)
+    "TOPOLOGIES",
+    "DwellingEnvelope",
+    "dwelling_envelope",
+    "supernodes",
+    "coarse_layout",
+    "two_step",
+    "squarify_blocks",
+    "skyline_coarse",
+    "topology_coarse",
     # constraints
     "Constraint",
     "program_constraints",
@@ -89,8 +159,12 @@ __all__ = [
     # kwaliteit (laag 2)
     "aspect_ratios",
     "facade_lengths",
+    "facade_ratio",
     "circulation_depth",
+    "escape_depth",
     "is_enfilade",
+    "fill_ratio",
+    "adjacency_gaps",
     # observatie
     "evaluate",
     "Variant",
@@ -110,4 +184,10 @@ __all__ = [
     "connectivity",
     "control",
     "choice",
+    "corridor_backbone",
+    "corridor_filter",
+    "propose_doors",
+    "redundant_doors",
+    "BackboneLink",
+    "CorridorBackbone",
 ]

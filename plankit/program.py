@@ -38,6 +38,16 @@ class ProgramSpace:
         exterior: ``True`` = buitenruimte-declaratie (buiten, veranda, ...).
         role: ``"verkeer"`` | ``"verblijf"`` | ``"facilitair"`` — functie van de
             ruimte (verkeersruimte telt in GO, niet in NVO).
+        entrance: ``True`` = entree van het gebouw(deel); maximaal één per
+            samenhangscomponente (zie :func:`plankit.conform.check_program`).
+        daylight: ``True`` = daglicht nodig; plaatsingsdriver naar de
+            compositie-rand (zie :func:`plankit.operators.propose_magnet`).
+        wet: ``True`` = natte cel; plaatsingsdriver bij andere natte cellen
+            (zie :func:`plankit.operators.propose_magnet`).
+        group: Woningcode (bv. ``"A1"``); ``None`` = geen groep. Entrances
+            worden per groep getoetst (zie :func:`plankit.conform.check_program`).
+        core: ``True`` = ontsluitingskern (lift/vluchttrap-typering volgt later
+            als subtype).
     """
 
     name: str = ""
@@ -47,6 +57,11 @@ class ProgramSpace:
     required: bool = True
     exterior: bool = False
     role: str = "verblijf"
+    entrance: bool = False
+    daylight: bool = False
+    wet: bool = False
+    group: str | None = None
+    core: bool = False
 
     def __post_init__(self) -> None:
         if self.role not in SPACE_ROLES:
@@ -63,6 +78,8 @@ class ProgramEdge:
         kind: ``"door"`` | ``"forbidden"`` | ``"facade"`` | ``"wall"`` | ``"visual"``.
         required: ``False`` = zachte hint (geen poort).
         orientation: Nice-to-have bij ``"facade"``: ``"N"``/``"O"``/``"Z"``/``"W"``.
+        max_distance: Zachte nabijheidseis in meters bij ``"wall"``/``"visual"``
+            (MFP-MaxAdjDistance); ``None`` = geen eis. Nog niet getoetst.
     """
 
     a: str
@@ -70,6 +87,7 @@ class ProgramEdge:
     kind: str = "wall"
     required: bool = True
     orientation: str | None = None
+    max_distance: float | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in EDGE_KINDS:
@@ -112,3 +130,18 @@ class RoomProgram:
             if edge.kind == "door":
                 graph.add_edge(edge.a, edge.b, kind="door")
         return graph
+
+
+def dwelling_budget(program: "RoomProgram", group: str) -> tuple[float, float]:
+    """Bruto-range van een woninggroep: som kamer-minima en -maxima.
+
+    Kamers zonder ``area_max`` tellen met ``area_min`` mee. Onbekende groep
+    geeft ``(0.0, 0.0)``.
+    """
+    lo, hi = 0.0, 0.0
+    for space in program.nodes.values():
+        if space.group != group:
+            continue
+        lo += space.area_min or 0.0
+        hi += space.area_max if space.area_max is not None else space.area_min or 0.0
+    return (lo, hi)

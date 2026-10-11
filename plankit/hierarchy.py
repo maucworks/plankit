@@ -1,0 +1,847 @@
+# This file was generated with the assistance of an AI coding tool.
+"""Hiërarchische generatie: eerst woningblokken rond de kern (grof), dan kamers
+per woning (fijn, bestaande magnet).
+
+Typologie ``open-kern`` legt concentrisch: kern in het midden, verkeer eromheen,
+woningen in de buitenring. ``portiek``/``galerij`` zijn als namen vastgelegd,
+implementatie volgt later. Deterministisch (seeded), zonder extra dependencies.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass
+
+from plankit.geometry import Vec
+from plankit.operators import (
+    _rects_overlap,
+    _shared_wall,
+    propose_magnet,
+    shape_for_area,
+    squarify_rects,
+)
+from plankit.program import RoomProgram, dwelling_budget
+
+#: Ontsluitingstypologieën. Alleen ``open-kern`` is geïmplementeerd.
+TOPOLOGIES = ("open-kern", "portiek", "galerij")
+
+#: Pakking-slack op blok-oppervlak: een budget-groot blok is in bbox-termen
+#: systematisch te klein voor rechthoek-pakking; 1.5 is een heurtistiek
+#: (restruimte binnen het blok is in-woning-residu; tuning is later werk).
+OVERSIZE = 1.5
+
+Rect = tuple[float, float, float, float]
+
+
+@dataclass
+class DwellingEnvelope:
+    """Neerwaartse envelop van een woninggroep: waaraan een blok moet voldoen.
+
+    Attributes:
+        group: Woningcode.
+        area_lo: Som kamer-minima (nominaal bruto).
+        area_hi: Som kamer-maxima (bruto bij volle slack).
+        n_rooms: Aantal kamers.
+        n_daylight: Aantal daglicht-kamers.
+        daylight_area: Som minima van daglicht-kamers (gevel-behoefte).
+    """
+
+    group: str
+    area_lo: float
+    area_hi: float
+    n_rooms: int
+    n_daylight: int
+    daylight_area: float
+
+
+def dwelling_envelope(program: RoomProgram, group: str) -> DwellingEnvelope:
+    """Leid de envelop van een woninggroep af uit het woningprogramma."""
+    lo, hi = dwelling_budget(program, group)
+    members = [s for s in program.nodes.values() if s.group == group]
+    day = [s for s in members if s.daylight]
+    return DwellingEnvelope(
+        group=group,
+        area_lo=lo,
+        area_hi=hi,
+        n_rooms=len(members),
+        n_daylight=len(day),
+        daylight_area=sum(s.area_min or 0.0 for s in day),
+    )
+
+
+def supernodes(program: RoomProgram) -> dict[str, list[str]]:
+    """Groepeer kamer-keys: per woningcode, groeploze ruimten als eigen knoop."""
+    out: dict[str, list[str]] = {}
+    for key, space in program.nodes.items():
+        if space.exterior:
+            continue
+        superkey = space.group if space.group is not None else key
+        out.setdefault(superkey, []).append(key)
+    return out
+
+
+def _super_of(members: dict[str, list[str]], key: str) -> str | None:
+    """Superknoop van een kamer-key (None als onbekend)."""
+    for superkey, room_keys in members.items():
+        if key in room_keys:
+            return superkey
+    return None
+
+
+def _supernode_area(program: RoomProgram, members: list[str]) -> float:
+    """Blok-oppervlak: budget-max bij groepen, area_min bij losse ruimten."""
+    group = program.nodes[members[0]].group
+    if group is not None:
+        return dwelling_budget(program, group)[1]
+    return sum(program.nodes[k].area_min or 0.0 for k in members)
+
+
+def _cluster_bbox(rects: dict[str, Rect]) -> Rect:
+    """Omhullende bbox van geplaatste blokken."""
+    return (
+        min(r[0] for r in rects.values()),
+        min(r[1] for r in rects.values()),
+        max(r[2] for r in rects.values()),
+        max(r[3] for r in rects.values()),
+    )
+
+
+def _side_origins(bbox: Rect, side: str, w: float, h: float, step: float = 0.5):
+    """Kandidaat-oorsprongen vlak tegen *side* van de cluster-bbox, scannend."""
+    x0, y0, x1, y1 = bbox
+    if side in ("top", "bottom"):
+        oy = y1 if side == "top" else y0 - h
+        t = x0 - w
+        while t <= x1 + 1e-9:
+            yield (t, oy)
+            t += step
+    else:
+        ox = x1 if side == "right" else x0 - w
+        t = y0 - h
+        while t <= y1 + 1e-9:
+            yield (ox, t)
+            t += step
+
+
+def _shared_segment(
+    a: Rect, b: Rect
+) -> tuple[float, float, float, float] | None:
+    """Langste overlappende collineaire span tussen twee blokken (of None)."""
+    best: tuple[float, tuple[float, float, float, float]] | None = None
+    if abs(a[2] - b[0]) <= 1e-9 or abs(b[2] - a[0]) <= 1e-9:
+        x = a[2] if abs(a[2] - b[0]) <= 1e-9 else b[2]
+        lo, hi = max(a[1], b[1]), min(a[3], b[3])
+        if hi - lo > 1e-9:
+            best = (hi - lo, (x, lo, x, hi))
+    if abs(a[3] - b[1]) <= 1e-9 or abs(b[3] - a[1]) <= 1e-9:
+        y = a[3] if abs(a[3] - b[1]) <= 1e-9 else b[3]
+        lo, hi = max(a[0], b[0]), min(a[2], b[2])
+        if hi - lo > 1e-9 and (best is None or hi - lo > best[0]):
+            best = (hi - lo, (lo, y, hi, y))
+    return best[1] if best is not None else None
+
+
+def _shared_segments(blocks: dict[str, Rect]) -> dict[tuple[str, str], tuple[float, float]]:
+    """Middens van gedeelde blokranden (langste per paar), beide richtingen."""
+    out: dict[tuple[str, str], tuple[float, float]] = {}
+    keys = list(blocks)
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            seg = _shared_segment(blocks[keys[i]], blocks[keys[j]])
+            if seg is not None:
+                mid = ((seg[0] + seg[2]) / 2.0, (seg[1] + seg[3]) / 2.0)
+                out[(keys[i], keys[j])] = mid
+                out[(keys[j], keys[i])] = mid
+    return out
+
+
+def coarse_open_kern(program: RoomProgram, seed: int = 0) -> dict[str, Rect]:
+    """Leg superknopen concentrisch: kern centraal, verkeer eromheen, dan woningen.
+
+    Blokgrootte uit budget-max (groepen) of area_min (los). Volgorde: kern,
+    verkeers-buren van de kern, overige op budget aflopend. Zijde-volgorde per
+    blok uit de seed (ring-spreiding). Deterministisch bij gelijke seed.
+    """
+    rng = random.Random(seed)
+    members = supernodes(program)
+    core = [s for s in members if any(program.nodes[k].core for k in members[s])]
+    center = core[0] if core else sorted(members)[0]
+    linked: set[str] = set()
+    for edge in program.edges:
+        if edge.kind not in ("door", "wall"):
+            continue
+        sa = _super_of(members, edge.a)
+        sb = _super_of(members, edge.b)
+        if sa == center and sb is not None and sb != center:
+            linked.add(sb)
+        elif sb == center and sa is not None and sa != center:
+            linked.add(sa)
+    rest = sorted(
+        (s for s in members if s != center and s not in linked),
+        key=lambda s: (-_supernode_area(program, members[s]), s),
+    )
+    order = [center] + sorted(linked) + rest
+    sizes = {
+        s: shape_for_area(max(_supernode_area(program, members[s]) * OVERSIZE, 1e-9))
+        for s in order
+    }
+    rects: dict[str, Rect] = {}
+    cw, ch = sizes[center]
+    rects[center] = (-cw / 2.0, -ch / 2.0, cw / 2.0, ch / 2.0)
+    sides = ["top", "right", "bottom", "left"]
+    for key in order[1:]:
+        w, h = sizes[key]
+        start = rng.randrange(len(sides))
+        rotated = sides[start:] + sides[:start]
+        best_rect: Rect | None = None
+        best_score = -1.0
+        for side in rotated:
+            for ox, oy in _side_origins(_cluster_bbox(rects), side, w, h):
+                cand = (ox, oy, ox + w, oy + h)
+                if any(_rects_overlap(cand, r) for r in rects.values()):
+                    continue
+                score = sum(_shared_wall(cand, r) for r in rects.values())
+                if score > best_score:
+                    best_score = score
+                    best_rect = cand
+        if best_rect is None:  # volgebouwd: rechts van de bbox plakken
+            x = _cluster_bbox(rects)[2]
+            best_rect = (x, 0.0, x + w, h)
+        rects[key] = best_rect
+    return rects
+
+
+def coarse_layout(
+    program: RoomProgram, topology: str = "open-kern", seed: int = 0
+) -> dict[str, Rect]:
+    """Grof-layout van superknopen per ontsluitingstypologie."""
+    if topology not in TOPOLOGIES:
+        raise ValueError(f"coarse_layout: onbekende typologie {topology!r}")
+    if topology != "open-kern":
+        raise NotImplementedError(f"coarse_layout: typologie {topology!r} volgt later")
+    return coarse_open_kern(program, seed=seed)
+
+
+def _polygon_area(poly: list[tuple[float, float]]) -> float:
+    """Oppervlak van een polygoon (shoelace)."""
+    s = 0.0
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        s += x0 * y1 - x1 * y0
+    return abs(s) / 2.0
+
+
+def squarify_blocks(
+    program: RoomProgram, boundary: list[tuple[float, float]]
+) -> dict[str, Rect]:
+    """Squarify-grof: verdeel de outline-bbox in woningblokken uit budgetten (D3).
+
+    Budget-maxima worden geschaald naar de outline-m² (top-down budget-antwoord);
+    groeploze ruimten doen mee op area_min. Exacte oppervlakten, aspect-gestuurd.
+    """
+    members = supernodes(program)
+    areas: dict[str, float] = {}
+    for superkey, room_keys in members.items():
+        group = program.nodes[room_keys[0]].group
+        if group is not None:
+            areas[superkey] = dwelling_budget(program, group)[1]
+        else:
+            areas[superkey] = sum(program.nodes[k].area_min or 0.0 for k in room_keys)
+    total = sum(areas.values())
+    if total <= 0:
+        raise ValueError("squarify_blocks: geen oppervlak om te verdelen")
+    if _polygon_area(boundary) <= 0:
+        raise ValueError("squarify_blocks: boundary heeft geen oppervlak")
+    scale = _polygon_area(boundary) / total
+    xs = [p[0] for p in boundary]
+    ys = [p[1] for p in boundary]
+    rect = (min(xs), min(ys), max(xs), max(ys))
+    return squarify_rects([(key, area * scale) for key, area in areas.items()], rect)
+
+
+def _link_graph(
+    program: RoomProgram, members: dict[str, list[str]]
+) -> dict[str, set[str]]:
+    """Superknoop-graaf: kanten bij deur/`wall`-eisen tussen groepen."""
+    room_super = {k: s for s, keys in members.items() for k in keys}
+    graph: dict[str, set[str]] = {s: set() for s in members}
+    for edge in program.edges:
+        if edge.kind not in ("door", "wall"):
+            continue
+        sa, sb = room_super.get(edge.a), room_super.get(edge.b)
+        if sa is None or sb is None or sa == sb:
+            continue
+        graph[sa].add(sb)
+        graph[sb].add(sa)
+    return graph
+
+
+def topology_coarse(
+    program: RoomProgram, boundary: list[tuple[float, float]], seed: int = 0
+) -> dict[str, Rect]:
+    """Link-gedreven grof-layout: maten absoluut, posities uit topologie (M17).
+
+    Blok-oppervlak = budget-max (groepen) of area_min (los), maal OVERSIZE
+    (pakking-slack, bewezen M14b-behoefte) — géén outline-schaling (dat is
+    betegeling, geen pakking; restruimte in de outline is reserve).
+    Elk blok vlak tegen de geplaatste buur met de meeste link (deur/`wall`);
+    BFS-volgorde vanaf de kern (anders grootste eerst). In outline-bbox waar
+    passend, anders erbuiten (conform meldt). Deterministisch bij gelijke seed.
+    """
+    import random
+
+    rng = random.Random(seed)
+    members = supernodes(program)
+    links = _link_graph(program, members)
+    if _polygon_area(boundary) <= 0:
+        raise ValueError("topology_coarse: boundary heeft geen oppervlak")
+    xs = [p[0] for p in boundary]
+    ys = [p[1] for p in boundary]
+    bbox = (min(xs), min(ys), max(xs), max(ys))
+    sizes = {
+        s: shape_for_area(max(_supernode_area(program, members[s]) * OVERSIZE, 1e-9))
+        for s in members
+    }
+    def _size(s: str) -> float:
+        w, h = sizes[s]
+        return w * h
+
+    core = [s for s in members if any(program.nodes[k].core for k in members[s])]
+    center = core[0] if core else min(members, key=lambda s: (-_size(s), s))
+    order = [center]
+    remaining = set(members) - {center}
+    while remaining:
+        placed = set(order)
+        scored = sorted(
+            remaining,
+            key=lambda s: (
+                -len(links[s] & placed),
+                -_size(s),
+                s,
+            ),
+        )
+        order.append(scored[0])
+        remaining.remove(scored[0])
+    rects: dict[str, Rect] = {}
+    cw, ch = sizes[center]
+    cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+    rects[center] = (cx - cw / 2.0, cy - ch / 2.0, cx + cw / 2.0, cy + ch / 2.0)
+    sides = ["top", "right", "bottom", "left"]
+
+    def inside_box(cand: Rect) -> bool:
+        return (
+            cand[0] >= bbox[0] - 1e-9
+            and cand[1] >= bbox[1] - 1e-9
+            and cand[2] <= bbox[2] + 1e-9
+            and cand[3] <= bbox[3] + 1e-9
+        )
+
+    for key in order[1:]:
+        w, h = sizes[key]
+        start = rng.randrange(len(sides))
+        rotated = sides[start:] + sides[:start]
+        cands: list[tuple[float, Rect]] = []
+        for side in rotated:
+            for ox, oy in _side_origins(_cluster_bbox(rects), side, w, h):
+                cand = (ox, oy, ox + w, oy + h)
+                if any(_rects_overlap(cand, r) for r in rects.values()):
+                    continue
+                contact = sum(
+                    _shared_wall(cand, rects[o])
+                    for o in rects
+                    if o in links[key]
+                )
+                cands.append((contact, cand))
+        inside = [c for c in cands if inside_box(c[1])]
+        pool = inside if inside else cands
+        if not pool:  # volgebouwd: rechts van de bbox plakken
+            x = _cluster_bbox(rects)[2]
+            rects[key] = (x, 0.0, x + w, h)
+            continue
+        pool.sort(key=lambda t: (-t[0], t[1]))
+        rects[key] = pool[0][1]
+    return rects
+
+
+def _area_of(size: tuple[float, float]) -> float:
+    """Oppervlak van een (w, h)-maat (voor sortering)."""
+    return size[0] * size[1]
+
+
+def skyline_coarse(
+    program: RoomProgram, boundary: list[tuple[float, float]]
+) -> tuple[dict[str, Rect], list[str]]:
+    """Skyline-pakking met link-scoring (M18): vult de outline-bbox netjes.
+
+    Bottom-left-fill: hub (meeste links) eerst onder-centraal, daarna op
+    (-links, -area, key) — grote en gelinkte blokken eerst, kleine flexibele
+    blokken klimmen naar contactrijke plekken. Elk blok op de laagste passende
+    skyline-positie (links en rechts uitgelijnd geprobeerd, beide oriëntaties);
+    score primair link-contact met geplaatste buren (deur/`wall`), dan laagste
+    top, dan meest links. Maten absoluut+oversize. Geeft (blokken, issues);
+    past een blok nergens in de bbox → issue (geen stille overflow).
+    Deterministisch.
+    """
+    members = supernodes(program)
+    links = _link_graph(program, members)
+    if _polygon_area(boundary) <= 0:
+        raise ValueError("skyline_coarse: boundary heeft geen oppervlak")
+    xs = [p[0] for p in boundary]
+    ys = [p[1] for p in boundary]
+    bx0, by0, bx1, by1 = min(xs), min(ys), max(xs), max(ys)
+    sizes: dict[str, list[tuple[float, float]]] = {}
+    for s, room_keys in members.items():
+        group = program.nodes[room_keys[0]].group
+        if group is not None:
+            area = dwelling_budget(program, group)[1]
+        else:
+            area = sum(program.nodes[k].area_min or 0.0 for k in room_keys)
+        area = max(area * OVERSIZE, 1e-9)
+        w, h = shape_for_area(area)
+        sizes[s] = [(w, h)] if w == h else [(w, h), (h, w)]
+    core = [s for s in members if any(program.nodes[k].core for k in members[s])]
+    is_core = set(core)
+    order = sorted(
+        members,
+        key=lambda s: (-len(links[s]), 0 if s in is_core else 1, -_area_of(sizes[s][0]), s),
+    )
+    if not members:
+        raise ValueError("skyline_coarse: geen ruimten om te plaatsen")
+    skyline: list[tuple[float, float, float]] = [(bx0, bx1, by0)]
+    rects: dict[str, Rect] = {}
+    issues: list[str] = []
+
+    def skyline_place(w: float, h: float) -> tuple[tuple, Rect] | None:
+        """Beste skyline-positie met score (link-contact, -top, -x)."""
+        best: tuple[tuple, Rect] | None = None
+        for x0, x1, y in skyline:
+            if x1 - x0 < w - 1e-9 or y + h > by1 + 1e-9:
+                continue
+            for ox in (x0, x1 - w):
+                cand = (ox, y, ox + w, y + h)
+                if any(_rects_overlap(cand, r) for r in rects.values()):
+                    continue
+                contact = 0.0
+                for o, r in rects.items():
+                    if o in links[placing_key]:
+                        contact += _shared_wall(cand, r)
+                key = (round(contact, 6), -(y + h), -ox)
+                if best is None or key > best[0]:
+                    best = (key, cand)
+        return best
+
+    def raise_skyline(rect: Rect) -> None:
+        """Werk de skyline bij na plaatsing (nonlocal)."""
+        nonlocal skyline
+        px0, py0, px1, py1 = rect
+        new_sky: list[tuple[float, float, float]] = []
+        for x0, x1, y in skyline:
+            if x1 <= px0 + 1e-9 or x0 >= px1 - 1e-9:
+                new_sky.append((x0, x1, y))
+                continue
+            if x0 < px0 - 1e-9:
+                new_sky.append((x0, px0, y))
+            new_sky.append((max(x0, px0), min(x1, px1), py1))
+            if x1 > px1 + 1e-9:
+                new_sky.append((px1, x1, y))
+        skyline = [(a, b, c) for a, b, c in new_sky if b - a > 1e-9]
+
+    for key in order:
+        placing_key = key
+        scored = [s for s in (skyline_place(w, h) for w, h in sizes[key]) if s is not None]
+        if not rects:
+            # hub-privilege: eerst onder-centraal (alleen als het past)
+            fw, fh = sizes[key][0]
+            cx = (bx0 + bx1) / 2.0
+            cand = (cx - fw / 2.0, by0, cx + fw / 2.0, by0 + fh)
+            if (
+                cand[0] >= bx0 - 1e-9
+                and cand[2] <= bx1 + 1e-9
+                and by0 + fh <= by1 + 1e-9
+            ):
+                scored = [((1.0, -(by0 + fh), 0.0), cand)] + scored
+        if not scored:
+            issues.append(f"blok {key} past niet in outline-bbox")
+            continue
+        if not scored:
+            issues.append(f"blok {key} past niet in outline-bbox")
+            continue
+        scored.sort(key=lambda t: t[0])
+        rects[key] = scored[-1][1]
+        raise_skyline(scored[-1][1])
+    return rects, sorted(set(issues))
+
+
+def _anchor_against(
+    area: float,
+    seg: tuple[float, float, float, float],
+    block: Rect,
+    left_or_below: bool,
+    min_width: float | None = None,
+    span: bool = False,
+) -> Rect | None:
+    """Leg kamer vlak tegen het segment vanuit eigen zijde, overlappend midden.
+
+    Beide oriëntaties en vierkant proberen; score = overlap, dan mate (span:
+    eerst blok overspannen voor kamers met contacten aan weerszijden).
+    Past niets binnen het blok → None. Deterministisch.
+    """
+    vertical = abs(seg[0] - seg[2]) <= 1e-9
+    seg_lo, seg_hi = (seg[1], seg[3]) if vertical else (seg[0], seg[2])
+    seg_mid = (seg_lo + seg_hi) / 2.0
+    if vertical:
+        span_need = (block[2] - block[0]) - 1e-9  # volle breedte = overkant halen
+    else:
+        span_need = (block[3] - block[1]) - 1e-9  # volle hoogte = overkant halen
+    best: tuple[tuple, Rect] | None = None
+    for cap in (1.5, 1.0):
+        for landscape in (True, False):
+            w, h = shape_for_area(area, max_aspect=cap, landscape=landscape, min_width=min_width)
+            if vertical:
+                ox = seg[0] - w if left_or_below else seg[0]
+                oy = min(max(seg_mid - h / 2.0, block[1]), block[3] - h)
+            else:
+                oy = seg[1] - h if left_or_below else seg[1]
+                ox = min(max(seg_mid - w / 2.0, block[0]), block[2] - w)
+            cand = (ox, oy, ox + w, oy + h)
+            if (
+                cand[0] < block[0] - 1e-9
+                or cand[1] < block[1] - 1e-9
+                or cand[2] > block[2] + 1e-9
+                or cand[3] > block[3] + 1e-9
+            ):
+                continue
+            if vertical:
+                overlap = max(0.0, min(oy + h, seg_hi) - max(oy, seg_lo))
+                extent = h
+                spans = w >= span_need
+            else:
+                overlap = max(0.0, min(ox + w, seg_hi) - max(ox, seg_lo))
+                extent = w
+                spans = h >= span_need
+            key = ((1 if spans else 0), round(overlap, 1), extent) if span else (round(overlap, 1), extent)
+            if best is None or key > best[0]:
+                best = (key, cand)
+    if best is None:
+        return None
+    overlap_rounded = best[0][1] if span else best[0][0]
+    if overlap_rounded <= 1e-9:
+        return None
+    return best[1]
+
+
+def _anchor_toward(
+    area: float,
+    seg: tuple[float, float, float, float],
+    block: Rect,
+    fixed: Rect,
+    min_width: float | None = None,
+    span: bool = False,
+) -> Rect | None:
+    """Leg kamer vlak tegen het segment, maximaal overlappend met de vaste rect.
+
+    Beide oriëntaties en vierkant proberen (span: eerst overspannen);
+    past niets binnen het blok of geen overlap → None. Deterministisch.
+    """
+    vertical = abs(seg[0] - seg[2]) <= 1e-9
+    if vertical:
+        span_need = (block[2] - block[0]) - 1e-9
+    else:
+        span_need = (block[3] - block[1]) - 1e-9
+    best: tuple[tuple, Rect] | None = None
+
+    def inside(cand: Rect) -> bool:
+        return (
+            cand[0] >= block[0] - 1e-9
+            and cand[1] >= block[1] - 1e-9
+            and cand[2] <= block[2] + 1e-9
+            and cand[3] <= block[3] + 1e-9
+        )
+
+    def spans(cand: Rect, w: float, h: float) -> bool:
+        if vertical:
+            return w >= span_need
+        return h >= span_need
+        return cand[0] <= block[0] + 1e-9 and cand[0] + w >= block[2] - 1e-9
+
+    for cap in (1.5, 1.0):
+        for landscape in (True, False):
+            w, h = shape_for_area(area, max_aspect=cap, landscape=landscape, min_width=min_width)
+            if vertical:
+                extent = h
+                origins = [(seg[0] - w, None), (seg[0], None)]
+            else:
+                extent = w
+                origins = [(None, seg[1] - h), (None, seg[1])]
+            for ox_opt, oy_opt in origins:
+                if vertical:
+                    assert ox_opt is not None
+                    oy = min(max((fixed[1] + fixed[3]) / 2.0 - h / 2.0, block[1]), block[3] - h)
+                    cand = (ox_opt, oy, ox_opt + w, oy + h)
+                    overlap = max(0.0, min(oy + h, fixed[3]) - max(oy, fixed[1]))
+                else:
+                    assert oy_opt is not None
+                    ox = min(max((fixed[0] + fixed[2]) / 2.0 - w / 2.0, block[0]), block[2] - w)
+                    cand = (ox, oy_opt, ox + w, oy_opt + h)
+                    overlap = max(0.0, min(ox + w, fixed[2]) - max(ox, fixed[0]))
+                if not inside(cand):
+                    continue
+                key = (
+                    ((1 if spans(cand, w, h) else 0), round(overlap, 1), extent)
+                    if span
+                    else (round(overlap, 1), extent)
+                )
+                if best is None or key > best[0]:
+                    best = (key, cand)
+    if best is None:
+        return None
+    overlap_rounded = best[0][1] if span else best[0][0]
+    if overlap_rounded <= 1e-9:
+        return None
+    return best[1]
+
+
+def _anchor_pairs(
+    program: RoomProgram,
+    members: dict[str, list[str]],
+    blocks: dict[str, Rect],
+    min_widths: dict[str, float] | None = None,
+) -> tuple[dict[str, Rect], list[str], list[tuple[str, str]]]:
+    """Veranker deur-paren over blokranden: één paar per blokkenpaar.
+
+    Geeft (ankers, issues, beoogde paren). Beide kamers vlak tegen het langste
+    gedeelde segment, overlappend interval; staat één zijde al vast, dan schuift
+    de ander ernaartoe. Past het niet → issue i.p.v. stilzwijgen.
+    """
+    from plankit.operators import _rects_overlap, _shared_wall
+
+    room_super = {k: s for s, keys in members.items() for k in keys}
+    anchors: dict[str, Rect] = {}
+    issues: list[str] = []
+    intended: list[tuple[str, str]] = []
+    done: set[frozenset] = set()
+    edges = sorted(
+        (e for e in program.edges if e.kind in ("door", "wall") and e.required),
+        key=lambda e: (e.a, e.b),
+    )
+    contact_supers: dict[str, set[str]] = {}
+    for edge in edges:
+        sa, sb = room_super.get(edge.a), room_super.get(edge.b)
+        if sa is None or sb is None or sa == sb:
+            continue
+        contact_supers.setdefault(edge.a, set()).add(sb)
+        contact_supers.setdefault(edge.b, set()).add(sa)
+    span_map = {k: len(s) >= 2 for k, s in contact_supers.items()}
+    for edge in edges:
+        sa, sb = room_super.get(edge.a), room_super.get(edge.b)
+        if sa is None or sb is None or sa == sb:
+            continue
+        pair = frozenset((sa, sb))
+        if pair in done:
+            continue
+        if sa not in blocks or sb not in blocks:
+            issues.append(f"paar {edge.a}-{edge.b} zonder blok ({sa}/{sb})")
+            done.add(pair)
+            continue
+        seg = _shared_segment(blocks[sa], blocks[sb])
+        if seg is None:
+            issues.append(f"geen gedeelde rand voor {edge.a}-{edge.b} ({sa}/{sb})")
+            done.add(pair)
+            continue
+        area_a = program.nodes[edge.a].area_min
+        area_b = program.nodes[edge.b].area_min
+        if area_a is None or area_b is None:
+            issues.append(f"paar {edge.a}-{edge.b} zonder oppervlak")
+            done.add(pair)
+            continue
+        mw = min_widths or {}
+        a_anchored = edge.a in anchors
+        b_anchored = edge.b in anchors
+        if a_anchored and b_anchored:
+            done.add(pair)
+            if _shared_wall(anchors[edge.a], anchors[edge.b]) <= 1e-9:
+                issues.append(f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand")
+            continue
+        if not a_anchored and not b_anchored:
+            vertical = abs(seg[0] - seg[2]) <= 1e-9
+            ra = blocks[sa]
+            a_left = (ra[2] <= blocks[sb][0] + 1e-9) if vertical else (ra[3] <= blocks[sb][1] + 1e-9)
+            rect_a = _anchor_against(area_a, seg, blocks[sa], a_left, mw.get(edge.a), span_map.get(edge.a, False))
+            rect_b = _anchor_against(area_b, seg, blocks[sb], not a_left, mw.get(edge.b), span_map.get(edge.b, False))
+            if rect_a is None or rect_b is None:
+                issues.append(f"paar {edge.a}-{edge.b} past niet aan gedeelde rand")
+                done.add(pair)
+                continue
+            clash = any(
+                _rects_overlap(rect_a, r) for k, r in anchors.items() if room_super[k] == sa
+            ) or any(
+                _rects_overlap(rect_b, r) for k, r in anchors.items() if room_super[k] == sb
+            )
+            if clash or _shared_wall(rect_a, rect_b) <= 1e-9:
+                issues.append(f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand")
+                done.add(pair)
+                continue
+            anchors[edge.a], anchors[edge.b] = rect_a, rect_b
+            intended.append((edge.a, edge.b))
+            done.add(pair)
+            continue
+        mover, fixed, mblock = (
+            (edge.a, anchors[edge.b], blocks[sa])
+            if b_anchored
+            else (edge.b, anchors[edge.a], blocks[sb])
+        )
+        mover_area = program.nodes[mover].area_min
+        if mover_area is None:
+            issues.append(f"paar {edge.a}-{edge.b} zonder oppervlak")
+            done.add(pair)
+            continue
+        mover_rect = _anchor_toward(
+            mover_area, seg, mblock, fixed, mw.get(mover), span_map.get(mover, False)
+        )
+        clash = mover_rect is None or any(
+            _rects_overlap(mover_rect, r)
+            for k, r in anchors.items()
+            if room_super[k] == room_super[mover]
+        )
+        if clash or (mover_rect is not None and _shared_wall(mover_rect, fixed) <= 1e-9):
+            issues.append(f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand")
+            done.add(pair)
+            continue
+        assert mover_rect is not None
+        anchors[mover] = mover_rect
+        intended.append((edge.a, edge.b))
+        done.add(pair)
+    return anchors, sorted(set(issues)), intended
+
+
+def _sub_program(program: RoomProgram, members: list[str]) -> RoomProgram:
+    """Deel-PvE van een woninggroep (alleen interne kanten)."""
+    return RoomProgram(
+        nodes={k: program.nodes[k] for k in members},
+        edges=[e for e in program.edges if e.a in members and e.b in members],
+    )
+
+
+def two_step(
+    program: RoomProgram,
+    topology: str = "open-kern",
+    seed: int = 0,
+    blocks: dict[str, Rect] | None = None,
+    min_widths: dict[str, float] | None = None,
+) -> tuple[dict[str, list[Vec]], list[str]]:
+    """Two-step-voorstel: grof blokken, fijn kamers per woning in het blok.
+
+    Met ``blocks`` (bv. uit :func:`squarify_blocks`) wordt de grof-stap
+    overgeslagen. Met ``min_widths`` respecteert de fijne vormkeuze de
+    breedte-eis. Vereiste contacten over blokranden worden eerst als paar
+    verankerd (één per blokkenpaar); de rest vult magnetisch. Geeft
+    ``(proposal, issues)``: kamers die buiten hun blok vallen worden
+    wel opgenomen maar gemeld als envelop-issue (graceful, M12a-lijn).
+    """
+    if topology not in TOPOLOGIES:
+        raise ValueError(f"two_step: onbekende typologie {topology!r}")
+    if blocks is None:
+        if topology != "open-kern":
+            raise NotImplementedError(f"two_step: typologie {topology!r} volgt later")
+        blocks = coarse_layout(program, topology=topology, seed=seed)
+    members = supernodes(program)
+    segments = _shared_segments(blocks)
+    room_super = {k: s for s, keys in members.items() for k in keys}
+    attractors: dict[str, tuple[float, float]] = {}
+    for edge in program.edges:
+        if edge.kind not in ("door", "wall"):
+            continue
+        for a, b in ((edge.a, edge.b), (edge.b, edge.a)):
+            sa, sb = room_super.get(a), room_super.get(b)
+            if sa is None or sb is None or sa == sb:
+                continue
+            mid = segments.get((sa, sb))
+            if mid is not None:
+                attractors.setdefault(a, []).append(mid)
+    attractors = {
+        k: (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+        for k, pts in attractors.items()
+    }
+    proposal: dict[str, list[Vec]] = {}
+    issues: list[str] = []
+    anchors, anchor_issues, intended = _anchor_pairs(program, members, blocks, min_widths)
+
+    def boxes_of(prop: dict[str, list[Vec]]) -> dict[str, Rect]:
+        boxes: dict[str, Rect] = {}
+        for key, pts in prop.items():
+            xs = [p.x for p in pts]
+            ys = [p.y for p in pts]
+            boxes[key] = (min(xs), min(ys), max(xs), max(ys))
+        return boxes
+
+    def run(use_anchors: bool) -> tuple[dict[str, list[Vec]], list[str]]:
+        """Fijne vulling per groep, met of zonder ankers."""
+        prop: dict[str, list[Vec]] = {}
+        env: list[str] = []
+        for superkey, block in blocks.items():
+            room_keys = members[superkey]
+            sub_attractors = {k: attractors[k] for k in room_keys if k in attractors}
+            sub_placed = (
+                {k: anchors[k] for k in room_keys if k in anchors} if use_anchors else {}
+            )
+            fine = propose_magnet(
+                _sub_program(program, room_keys),
+                seed=seed,
+                bounds=block,
+                attractors=sub_attractors,
+                min_widths=min_widths,
+                placed=sub_placed or None,
+            )
+            for key, pts in fine.items():
+                prop[key] = pts
+                mxs = [p.x for p in pts]
+                mys = [p.y for p in pts]
+                if (
+                    min(mxs) < block[0] - 1e-9
+                    or min(mys) < block[1] - 1e-9
+                    or max(mxs) > block[2] + 1e-9
+                    or max(mys) > block[3] + 1e-9
+                ):
+                    env.append(f"envelop te klein voor {key} ({superkey})")
+        return prop, env
+
+    def global_score(prop: dict[str, list[Vec]]) -> tuple[int, int]:
+        """(kamers buiten eigen blok, -vereiste contacten met gedeelde wand)."""
+        boxes = boxes_of(prop)
+        over = 0
+        for key, box in boxes.items():
+            block = blocks[room_super[key]]
+            if (
+                box[0] < block[0] - 1e-9
+                or box[1] < block[1] - 1e-9
+                or box[2] > block[2] + 1e-9
+                or box[3] > block[3] + 1e-9
+            ):
+                over += 1
+        contacts = 0
+        for edge in program.edges:
+            if edge.kind not in ("door", "wall") or not edge.required:
+                continue
+            if edge.a in boxes and edge.b in boxes:
+                if _shared_wall(boxes[edge.a], boxes[edge.b]) > 1e-9:
+                    contacts += 1
+        return (over, -contacts)
+
+    prop_a, env_a = run(True)
+    prop_b, env_b = run(False)
+    if global_score(prop_b) < global_score(prop_a):
+        proposal, issues = prop_b, env_b
+    else:
+        proposal, issues = prop_a, env_a
+    boxes = boxes_of(proposal)
+    ok_pairs = {
+        (a, b) for a, b in intended if _shared_wall(boxes[a], boxes[b]) > 1e-9
+    }
+    pair_issues = [i for i in anchor_issues]
+    issues.extend(
+        i for i in pair_issues
+        if not any(f"paar {a}-{b}" in i for a, b in ok_pairs)
+    )
+    return proposal, sorted(set(issues))

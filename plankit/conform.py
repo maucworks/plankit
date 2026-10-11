@@ -18,6 +18,19 @@ from plankit.program import RoomProgram
 _TOL = 1e-6
 
 
+def _point_in_polygon(pt: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
+    """Ray casting: True als punt strikt binnen de polygoon ligt."""
+    x, y = pt
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        if (y0 > y) != (y1 > y) and x < (x1 - x0) * (y - y0) / (y1 - y0) + x0:
+            inside = not inside
+    return inside
+
+
 @dataclass
 class ConformanceReport:
     """Resultaat van :func:`conform`.
@@ -27,12 +40,15 @@ class ConformanceReport:
         violated: Labels van geschonden harde eisen.
         missing: Labels van vereiste ruimten die ontbreken in het skelet.
         unconstrained: Labels die niet getoetst konden worden (zacht/onbekend).
+        missing_adj: Per kamer-key de vereiste buren (`door` + vereiste
+            `wall`) zonder gedeelde wand/deur (MFP-`!A`-lijst).
     """
 
     satisfied: list[str] = field(default_factory=list)
     violated: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     unconstrained: list[str] = field(default_factory=list)
+    missing_adj: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def ok(self) -> bool:
@@ -40,11 +56,19 @@ class ConformanceReport:
         return not self.violated and not self.missing
 
 
-def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
+def conform(
+    sd: PlanarSubdivision,
+    program: RoomProgram,
+    boundary: list[tuple[float, float]] | None = None,
+    min_widths: dict[str, float] | None = None,
+) -> ConformanceReport:
     """Vergelijk een skelet met een PvE-graaf.
 
     Koppelt programmaruimten aan faces op ``Face.label``, toetst oppervlakte-
     ranges en de getypeerde kanten (``door``/``forbidden``/``facade``/``wall``).
+    Met ``boundary``: faces met centroid buiten de polygoon schenden
+    (centroid-test; exacte clipping is later werk). Met ``min_widths``
+    (kamer-key → minimale breedte): faces smaller dan de limiet schenden.
     Exterieure knopen zijn declaraties (``exterior=True``), geen te realiseren
     ruimten.
     """
@@ -68,6 +92,21 @@ def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
         if space.area_max is not None and area > space.area_max + _TOL:
             report.violated.append(f"space:{key}:area>{space.area_max}")
             continue
+        if boundary is not None:
+            pts = sd.face_vertices(fid)
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
+            if not _point_in_polygon((cx, cy), boundary):
+                report.violated.append(f"space:{key}:buiten-outline")
+                continue
+        if min_widths is not None and key in min_widths:
+            pts = sd.face_vertices(fid)
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            narrow = min(max(xs) - min(xs), max(ys) - min(ys))
+            if narrow < min_widths[key] - _TOL:
+                report.violated.append(f"space:{key}:breedte<{min_widths[key]}")
+                continue
         report.satisfied.append(f"space:{key}")
 
     for edge in program.edges:
@@ -104,18 +143,25 @@ def conform(sd: PlanarSubdivision, program: RoomProgram) -> ConformanceReport:
                 report.satisfied.append(label)
             else:
                 report.violated.append(label)
+                report.missing_adj.setdefault(edge.a, []).append(edge.b)
+                report.missing_adj.setdefault(edge.b, []).append(edge.a)
         else:  # "wall", "visual" — zacht
             if graph.has_edge(str(fa), str(fb)):
                 report.satisfied.append(label)
             elif edge.required:
                 report.violated.append(label)
+                report.missing_adj.setdefault(edge.a, []).append(edge.b)
+                report.missing_adj.setdefault(edge.b, []).append(edge.a)
             else:
                 report.unconstrained.append(label)
+    for key in report.missing_adj:
+        report.missing_adj[key] = sorted(set(report.missing_adj[key]))
     return report
 
 
 def check_program(program: RoomProgram) -> list[str]:
-    """Statische controles op een PvE-graaf: onbekende refs en geïsoleerde knopen."""
+    """Statische controles op een PvE-graaf: onbekende refs, geïsoleerde knopen
+    en meerdere entrances per woninggroep (of per component zonder groep)."""
     issues: list[str] = []
     keys = set(program.nodes)
     for edge in program.edges:
@@ -128,11 +174,25 @@ def check_program(program: RoomProgram) -> list[str]:
     for key in keys:
         g.add_node(key)
     for edge in program.edges:
-        if edge.kind != "forbidden":
+        if edge.kind != "forbidden" and edge.a in keys and edge.b in keys:
             g.add_edge(edge.a, edge.b)
     for key in keys:
         if g.degree(key) == 0:
             issues.append(f"geïsoleerde knoop {key!r}")
+    for ci, comp in enumerate(g.connected_components()):
+        buckets: dict[tuple[str, str], list[str]] = {}
+        for key in comp:
+            if not program.nodes[key].entrance:
+                continue
+            group = program.nodes[key].group
+            bucket = ("woning", group) if group is not None else ("component", str(ci))
+            buckets.setdefault(bucket, []).append(key)
+        for (kind, name), entrances in buckets.items():
+            if len(entrances) > 1:
+                where = f"woning {name!r}" if kind == "woning" else "één component"
+                issues.append(
+                    f"meerdere entrances in {where}: {', '.join(sorted(entrances))}"
+                )
     return issues
 
 
@@ -152,6 +212,9 @@ class CirculationReport:
 
 
 def _default_root(program: RoomProgram) -> str | None:
+    for key, space in program.nodes.items():
+        if space.entrance:
+            return key
     for key, space in program.nodes.items():
         if space.exterior:
             return key

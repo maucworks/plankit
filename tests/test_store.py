@@ -1,8 +1,6 @@
 # This file was generated with the assistance of an AI coding tool.
 """Tests voor de variant-store (plankit.store)."""
 
-import pytest
-
 from plankit import ProgramEdge, ProgramSpace, RoomProgram
 from plankit.generate import generate
 from plankit.planar import PlanarSubdivision
