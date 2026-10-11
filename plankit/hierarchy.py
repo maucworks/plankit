@@ -365,6 +365,115 @@ def topology_coarse(
     return rects
 
 
+def _area_of(size: tuple[float, float]) -> float:
+    """Oppervlak van een (w, h)-maat (voor sortering)."""
+    return size[0] * size[1]
+
+
+def skyline_coarse(
+    program: RoomProgram, boundary: list[tuple[float, float]]
+) -> tuple[dict[str, Rect], list[str]]:
+    """Skyline-pakking met link-scoring (M18): vult de outline-bbox netjes.
+
+    Bottom-left-fill: hub (meeste links) eerst onder-centraal, daarna op
+    (-links, -area, key) — grote en gelinkte blokken eerst, kleine flexibele
+    blokken klimmen naar contactrijke plekken. Elk blok op de laagste passende
+    skyline-positie (links en rechts uitgelijnd geprobeerd, beide oriëntaties);
+    score primair link-contact met geplaatste buren (deur/`wall`), dan laagste
+    top, dan meest links. Maten absoluut+oversize. Geeft (blokken, issues);
+    past een blok nergens in de bbox → issue (geen stille overflow).
+    Deterministisch.
+    """
+    members = supernodes(program)
+    links = _link_graph(program, members)
+    if _polygon_area(boundary) <= 0:
+        raise ValueError("skyline_coarse: boundary heeft geen oppervlak")
+    xs = [p[0] for p in boundary]
+    ys = [p[1] for p in boundary]
+    bx0, by0, bx1, by1 = min(xs), min(ys), max(xs), max(ys)
+    sizes: dict[str, list[tuple[float, float]]] = {}
+    for s, room_keys in members.items():
+        group = program.nodes[room_keys[0]].group
+        if group is not None:
+            area = dwelling_budget(program, group)[1]
+        else:
+            area = sum(program.nodes[k].area_min or 0.0 for k in room_keys)
+        area = max(area * OVERSIZE, 1e-9)
+        w, h = shape_for_area(area)
+        sizes[s] = [(w, h)] if w == h else [(w, h), (h, w)]
+    core = [s for s in members if any(program.nodes[k].core for k in members[s])]
+    is_core = set(core)
+    order = sorted(
+        members,
+        key=lambda s: (-len(links[s]), 0 if s in is_core else 1, -_area_of(sizes[s][0]), s),
+    )
+    if not members:
+        raise ValueError("skyline_coarse: geen ruimten om te plaatsen")
+    skyline: list[tuple[float, float, float]] = [(bx0, bx1, by0)]
+    rects: dict[str, Rect] = {}
+    issues: list[str] = []
+
+    def skyline_place(w: float, h: float) -> tuple[tuple, Rect] | None:
+        """Beste skyline-positie met score (link-contact, -top, -x)."""
+        best: tuple[tuple, Rect] | None = None
+        for x0, x1, y in skyline:
+            if x1 - x0 < w - 1e-9 or y + h > by1 + 1e-9:
+                continue
+            for ox in (x0, x1 - w):
+                cand = (ox, y, ox + w, y + h)
+                if any(_rects_overlap(cand, r) for r in rects.values()):
+                    continue
+                contact = 0.0
+                for o, r in rects.items():
+                    if o in links[placing_key]:
+                        contact += _shared_wall(cand, r)
+                key = (round(contact, 6), -(y + h), -ox)
+                if best is None or key > best[0]:
+                    best = (key, cand)
+        return best
+
+    def raise_skyline(rect: Rect) -> None:
+        """Werk de skyline bij na plaatsing (nonlocal)."""
+        nonlocal skyline
+        px0, py0, px1, py1 = rect
+        new_sky: list[tuple[float, float, float]] = []
+        for x0, x1, y in skyline:
+            if x1 <= px0 + 1e-9 or x0 >= px1 - 1e-9:
+                new_sky.append((x0, x1, y))
+                continue
+            if x0 < px0 - 1e-9:
+                new_sky.append((x0, px0, y))
+            new_sky.append((max(x0, px0), min(x1, px1), py1))
+            if x1 > px1 + 1e-9:
+                new_sky.append((px1, x1, y))
+        skyline = [(a, b, c) for a, b, c in new_sky if b - a > 1e-9]
+
+    for key in order:
+        placing_key = key
+        scored = [s for s in (skyline_place(w, h) for w, h in sizes[key]) if s is not None]
+        if not rects:
+            # hub-privilege: eerst onder-centraal (alleen als het past)
+            fw, fh = sizes[key][0]
+            cx = (bx0 + bx1) / 2.0
+            cand = (cx - fw / 2.0, by0, cx + fw / 2.0, by0 + fh)
+            if (
+                cand[0] >= bx0 - 1e-9
+                and cand[2] <= bx1 + 1e-9
+                and by0 + fh <= by1 + 1e-9
+            ):
+                scored = [((1.0, -(by0 + fh), 0.0), cand)] + scored
+        if not scored:
+            issues.append(f"blok {key} past niet in outline-bbox")
+            continue
+        if not scored:
+            issues.append(f"blok {key} past niet in outline-bbox")
+            continue
+        scored.sort(key=lambda t: t[0])
+        rects[key] = scored[-1][1]
+        raise_skyline(scored[-1][1])
+    return rects, sorted(set(issues))
+
+
 def _anchor_against(
     area: float,
     seg: tuple[float, float, float, float],
@@ -531,6 +640,10 @@ def _anchor_pairs(
             continue
         pair = frozenset((sa, sb))
         if pair in done:
+            continue
+        if sa not in blocks or sb not in blocks:
+            issues.append(f"paar {edge.a}-{edge.b} zonder blok ({sa}/{sb})")
+            done.add(pair)
             continue
         seg = _shared_segment(blocks[sa], blocks[sb])
         if seg is None:

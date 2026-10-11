@@ -10,6 +10,7 @@ from plankit.generate import generate
 from plankit.hierarchy import (
     coarse_layout,
     dwelling_envelope,
+    skyline_coarse,
     squarify_blocks,
     supernodes,
     topology_coarse,
@@ -257,3 +258,60 @@ def test_topology_coarse_deterministic_and_rejects():
     empty = RoomProgram(nodes={}, edges=[])
     with pytest.raises(ValueError):
         topology_coarse(empty, boundary)
+
+
+def _sky_shared_len(a, b) -> float:
+    total = 0.0
+    if abs(a[2] - b[0]) <= 1e-9 or abs(b[2] - a[0]) <= 1e-9:
+        total += max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    if abs(a[3] - b[1]) <= 1e-9 or abs(b[3] - a[1]) <= 1e-9:
+        total += max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    return total
+
+
+def test_skyline_coarse_linked_blocks_share_border():
+    prog = _toy()
+    boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    blocks, issues = skyline_coarse(prog, boundary)
+    assert set(blocks) == {"A1", "A2", "gang", "kern"}
+    assert issues == []
+    assert _sky_shared_len(blocks["gang"], blocks["kern"]) > 0
+    assert _sky_shared_len(blocks["A1"], blocks["gang"]) > 0
+    assert _sky_shared_len(blocks["A2"], blocks["gang"]) > 0
+
+
+def test_skyline_coarse_in_bbox_and_deterministic():
+    prog = _toy()
+    boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    blocks, _ = skyline_coarse(prog, boundary)
+    for rect in blocks.values():
+        assert rect[0] >= 0.0 - 1e-9 and rect[1] >= 0.0 - 1e-9
+        assert rect[2] <= 20.0 + 1e-9 and rect[3] <= 10.0 + 1e-9
+    again, _ = skyline_coarse(prog, boundary)
+    assert blocks == again
+
+
+def test_skyline_coarse_full_reports_issue():
+    prog = RoomProgram(
+        nodes={"x": ProgramSpace(name="X", area_min=100.0)},
+        edges=[],
+    )
+    _, issues = skyline_coarse(prog, [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)])
+    assert any("past niet" in i for i in issues)
+
+
+def test_skyline_coarse_rejects_empty():
+    prog = RoomProgram(nodes={}, edges=[])
+    with pytest.raises(ValueError):
+        skyline_coarse(prog, [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])
+
+
+def test_two_step_missing_block_no_crash():
+    prog = _toy()
+    blocks, _ = skyline_coarse(
+        prog, [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    )
+    del blocks["A2"]  # blok weg: geen crash, kamers ontbreken netjes
+    proposal, issues = two_step(prog, seed=0, blocks=blocks)
+    assert "w2" not in proposal and "s2" not in proposal
+    assert set(proposal) == {"w1", "s1", "gang", "kern"}
