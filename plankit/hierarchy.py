@@ -261,6 +261,110 @@ def squarify_blocks(
     return squarify_rects([(key, area * scale) for key, area in areas.items()], rect)
 
 
+def _link_graph(
+    program: RoomProgram, members: dict[str, list[str]]
+) -> dict[str, set[str]]:
+    """Superknoop-graaf: kanten bij deur/`wall`-eisen tussen groepen."""
+    room_super = {k: s for s, keys in members.items() for k in keys}
+    graph: dict[str, set[str]] = {s: set() for s in members}
+    for edge in program.edges:
+        if edge.kind not in ("door", "wall"):
+            continue
+        sa, sb = room_super.get(edge.a), room_super.get(edge.b)
+        if sa is None or sb is None or sa == sb:
+            continue
+        graph[sa].add(sb)
+        graph[sb].add(sa)
+    return graph
+
+
+def topology_coarse(
+    program: RoomProgram, boundary: list[tuple[float, float]], seed: int = 0
+) -> dict[str, Rect]:
+    """Link-gedreven grof-layout: maten absoluut, posities uit topologie (M17).
+
+    Blok-oppervlak = budget-max (groepen) of area_min (los), maal OVERSIZE
+    (pakking-slack, bewezen M14b-behoefte) — géén outline-schaling (dat is
+    betegeling, geen pakking; restruimte in de outline is reserve).
+    Elk blok vlak tegen de geplaatste buur met de meeste link (deur/`wall`);
+    BFS-volgorde vanaf de kern (anders grootste eerst). In outline-bbox waar
+    passend, anders erbuiten (conform meldt). Deterministisch bij gelijke seed.
+    """
+    import random
+
+    rng = random.Random(seed)
+    members = supernodes(program)
+    links = _link_graph(program, members)
+    if _polygon_area(boundary) <= 0:
+        raise ValueError("topology_coarse: boundary heeft geen oppervlak")
+    xs = [p[0] for p in boundary]
+    ys = [p[1] for p in boundary]
+    bbox = (min(xs), min(ys), max(xs), max(ys))
+    sizes = {
+        s: shape_for_area(max(_supernode_area(program, members[s]) * OVERSIZE, 1e-9))
+        for s in members
+    }
+    def _size(s: str) -> float:
+        w, h = sizes[s]
+        return w * h
+
+    core = [s for s in members if any(program.nodes[k].core for k in members[s])]
+    center = core[0] if core else min(members, key=lambda s: (-_size(s), s))
+    order = [center]
+    remaining = set(members) - {center}
+    while remaining:
+        placed = set(order)
+        scored = sorted(
+            remaining,
+            key=lambda s: (
+                -len(links[s] & placed),
+                -_size(s),
+                s,
+            ),
+        )
+        order.append(scored[0])
+        remaining.remove(scored[0])
+    rects: dict[str, Rect] = {}
+    cw, ch = sizes[center]
+    cx, cy = (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+    rects[center] = (cx - cw / 2.0, cy - ch / 2.0, cx + cw / 2.0, cy + ch / 2.0)
+    sides = ["top", "right", "bottom", "left"]
+
+    def inside_box(cand: Rect) -> bool:
+        return (
+            cand[0] >= bbox[0] - 1e-9
+            and cand[1] >= bbox[1] - 1e-9
+            and cand[2] <= bbox[2] + 1e-9
+            and cand[3] <= bbox[3] + 1e-9
+        )
+
+    for key in order[1:]:
+        w, h = sizes[key]
+        start = rng.randrange(len(sides))
+        rotated = sides[start:] + sides[:start]
+        cands: list[tuple[float, Rect]] = []
+        for side in rotated:
+            for ox, oy in _side_origins(_cluster_bbox(rects), side, w, h):
+                cand = (ox, oy, ox + w, oy + h)
+                if any(_rects_overlap(cand, r) for r in rects.values()):
+                    continue
+                contact = sum(
+                    _shared_wall(cand, rects[o])
+                    for o in rects
+                    if o in links[key]
+                )
+                cands.append((contact, cand))
+        inside = [c for c in cands if inside_box(c[1])]
+        pool = inside if inside else cands
+        if not pool:  # volgebouwd: rechts van de bbox plakken
+            x = _cluster_bbox(rects)[2]
+            rects[key] = (x, 0.0, x + w, h)
+            continue
+        pool.sort(key=lambda t: (-t[0], t[1]))
+        rects[key] = pool[0][1]
+    return rects
+
+
 def _anchor_against(
     area: float,
     seg: tuple[float, float, float, float],
@@ -550,68 +654,75 @@ def two_step(
     proposal: dict[str, list[Vec]] = {}
     issues: list[str] = []
     anchors, anchor_issues, intended = _anchor_pairs(program, members, blocks, min_widths)
-    for superkey, block in blocks.items():
-        room_keys = members[superkey]
-        sub_attractors = {k: attractors[k] for k in room_keys if k in attractors}
-        sub_placed = {k: anchors[k] for k in room_keys if k in anchors}
-        sub = _sub_program(program, room_keys)
-        opt_a = propose_magnet(
-            sub, seed=seed, bounds=block, attractors=sub_attractors,
-            min_widths=min_widths, placed=sub_placed or None,
-        )
-        opt_b = propose_magnet(
-            sub, seed=seed, bounds=block, attractors=sub_attractors, min_widths=min_widths,
-        )
 
-        def score(prop: dict[str, list[Vec]]) -> tuple[int, int, int]:
-            """(kamers buiten blok, -intra-contacten, -paar-contacten): lager beter."""
-            over = 0
-            for pts in prop.values():
-                xs = [p.x for p in pts]
-                ys = [p.y for p in pts]
-                if (
-                    min(xs) < block[0] - 1e-9
-                    or min(ys) < block[1] - 1e-9
-                    or max(xs) > block[2] + 1e-9
-                    or max(ys) > block[3] + 1e-9
-                ):
-                    over += 1
-            boxes = {}
-            for key, pts in prop.items():
-                xs = [p.x for p in pts]
-                ys = [p.y for p in pts]
-                boxes[key] = (min(xs), min(ys), max(xs), max(ys))
-            intra = 0
-            for edge in program.edges:
-                if edge.kind not in ("door", "wall") or not edge.required:
-                    continue
-                if edge.a in boxes and edge.b in boxes:
-                    if _shared_wall(boxes[edge.a], boxes[edge.b]) > 1e-9:
-                        intra += 1
-            touch = sum(
-                1 for a, b in intended
-                if a in boxes and b in boxes and _shared_wall(boxes[a], boxes[b]) > 1e-9
+    def boxes_of(prop: dict[str, list[Vec]]) -> dict[str, Rect]:
+        boxes: dict[str, Rect] = {}
+        for key, pts in prop.items():
+            xs = [p.x for p in pts]
+            ys = [p.y for p in pts]
+            boxes[key] = (min(xs), min(ys), max(xs), max(ys))
+        return boxes
+
+    def run(use_anchors: bool) -> tuple[dict[str, list[Vec]], list[str]]:
+        """Fijne vulling per groep, met of zonder ankers."""
+        prop: dict[str, list[Vec]] = {}
+        env: list[str] = []
+        for superkey, block in blocks.items():
+            room_keys = members[superkey]
+            sub_attractors = {k: attractors[k] for k in room_keys if k in attractors}
+            sub_placed = (
+                {k: anchors[k] for k in room_keys if k in anchors} if use_anchors else {}
             )
-            return (over, -intra, -touch)
+            fine = propose_magnet(
+                _sub_program(program, room_keys),
+                seed=seed,
+                bounds=block,
+                attractors=sub_attractors,
+                min_widths=min_widths,
+                placed=sub_placed or None,
+            )
+            for key, pts in fine.items():
+                prop[key] = pts
+                mxs = [p.x for p in pts]
+                mys = [p.y for p in pts]
+                if (
+                    min(mxs) < block[0] - 1e-9
+                    or min(mys) < block[1] - 1e-9
+                    or max(mxs) > block[2] + 1e-9
+                    or max(mys) > block[3] + 1e-9
+                ):
+                    env.append(f"envelop te klein voor {key} ({superkey})")
+        return prop, env
 
-        keep_anchors = score(opt_a) <= score(opt_b)
-        fine = opt_a if keep_anchors else opt_b
-        for key, pts in fine.items():
-            proposal[key] = pts
-            mxs = [p.x for p in pts]
-            mys = [p.y for p in pts]
+    def global_score(prop: dict[str, list[Vec]]) -> tuple[int, int]:
+        """(kamers buiten eigen blok, -vereiste contacten met gedeelde wand)."""
+        boxes = boxes_of(prop)
+        over = 0
+        for key, box in boxes.items():
+            block = blocks[room_super[key]]
             if (
-                min(mxs) < block[0] - 1e-9
-                or min(mys) < block[1] - 1e-9
-                or max(mxs) > block[2] + 1e-9
-                or max(mys) > block[3] + 1e-9
+                box[0] < block[0] - 1e-9
+                or box[1] < block[1] - 1e-9
+                or box[2] > block[2] + 1e-9
+                or box[3] > block[3] + 1e-9
             ):
-                issues.append(f"envelop te klein voor {key} ({superkey})")
-    boxes = {}
-    for key, pts in proposal.items():
-        xs = [p.x for p in pts]
-        ys = [p.y for p in pts]
-        boxes[key] = (min(xs), min(ys), max(xs), max(ys))
+                over += 1
+        contacts = 0
+        for edge in program.edges:
+            if edge.kind not in ("door", "wall") or not edge.required:
+                continue
+            if edge.a in boxes and edge.b in boxes:
+                if _shared_wall(boxes[edge.a], boxes[edge.b]) > 1e-9:
+                    contacts += 1
+        return (over, -contacts)
+
+    prop_a, env_a = run(True)
+    prop_b, env_b = run(False)
+    if global_score(prop_b) < global_score(prop_a):
+        proposal, issues = prop_b, env_b
+    else:
+        proposal, issues = prop_a, env_a
+    boxes = boxes_of(proposal)
     ok_pairs = {
         (a, b) for a, b in intended if _shared_wall(boxes[a], boxes[b]) > 1e-9
     }

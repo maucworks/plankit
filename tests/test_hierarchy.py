@@ -12,6 +12,7 @@ from plankit.hierarchy import (
     dwelling_envelope,
     squarify_blocks,
     supernodes,
+    topology_coarse,
     two_step,
 )
 
@@ -215,3 +216,44 @@ def test_two_step_with_squarify_blocks():
     proposal, issues = two_step(prog, seed=0, blocks=squarify_blocks(prog, boundary))
     assert set(proposal) == {"w1", "s1", "w2", "s2", "gang", "kern"}
     assert isinstance(issues, list)
+
+
+def _shared_len(a, b) -> float:
+    total = 0.0
+    if abs(a[2] - b[0]) <= 1e-9 or abs(b[2] - a[0]) <= 1e-9:
+        total += max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    if abs(a[3] - b[1]) <= 1e-9 or abs(b[3] - a[1]) <= 1e-9:
+        total += max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    return total
+
+
+def test_topology_coarse_linked_blocks_share_border():
+    prog = _toy()
+    boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    blocks = topology_coarse(prog, boundary, seed=0)
+    assert set(blocks) == {"A1", "A2", "gang", "kern"}
+    assert _shared_len(blocks["gang"], blocks["kern"]) > 0
+    assert _shared_len(blocks["A1"], blocks["gang"]) > 0
+    assert _shared_len(blocks["A2"], blocks["gang"]) > 0
+
+
+def test_topology_coarse_in_bbox_and_scaled():
+    prog = _toy()
+    boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    blocks = topology_coarse(prog, boundary, seed=0)
+    for rect in blocks.values():
+        assert rect[0] >= 0.0 - 1e-9 and rect[1] >= 0.0 - 1e-9
+        assert rect[2] <= 20.0 + 1e-9 and rect[3] <= 10.0 + 1e-9
+    area = blocks["A1"]
+    assert (area[2] - area[0]) * (area[3] - area[1]) == pytest.approx(25.0 * 1.5)
+
+
+def test_topology_coarse_deterministic_and_rejects():
+    prog = _toy()
+    boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
+    assert topology_coarse(prog, boundary, seed=1) == topology_coarse(prog, boundary, seed=1)
+    with pytest.raises(ValueError):
+        topology_coarse(prog, [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0)])
+    empty = RoomProgram(nodes={}, edges=[])
+    with pytest.raises(ValueError):
+        topology_coarse(empty, boundary)

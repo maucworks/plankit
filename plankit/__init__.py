@@ -56,6 +56,7 @@ from plankit.hierarchy import (
     dwelling_envelope,
     squarify_blocks,
     supernodes,
+    topology_coarse,
     two_step,
 )
 from plankit.operators import (
@@ -136,6 +137,7 @@ __all__ = [
     "coarse_layout",
     "two_step",
     "squarify_blocks",
+    "topology_coarse",
     # constraints
     "Constraint",
     "program_constraints",
