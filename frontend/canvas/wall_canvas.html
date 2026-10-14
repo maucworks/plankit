@@ -39,7 +39,8 @@
   .seg.access { stroke: var(--acc); stroke-width: 2.5; }
   .seg.facade { stroke: var(--facade); stroke-width: 3; }
   .seg.hot { stroke: #111827; stroke-width: 3.2; }
-  .vert { fill: #111827; r: 4; cursor: move; }
+  .vert { fill: #111827; r: 7; cursor: move; }
+  .vert.hot { fill: var(--acc); r: 9; }
   .vert.hot { fill: var(--acc); r: 6; }
   .face-fill { pointer-events: all; cursor: pointer; }
   .facelabel { font-size: 11px; fill: #111827; pointer-events: none; }
@@ -1451,6 +1452,7 @@ if (demo){
   solveDraft().then(gateDraft);
 }
 </script>
+
 
 </body>
 </html>
