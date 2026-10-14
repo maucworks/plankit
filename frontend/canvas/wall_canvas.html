@@ -49,6 +49,8 @@
   .helper-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 8 5; opacity: 0.65; pointer-events: none; }
   .helper-line.master-helper { stroke: #2563eb; stroke-width: 2; opacity: 0.85; }
   .snap-line { stroke: #93c5fd; stroke-width: 2.5; pointer-events: none; }
+  .dim { stroke: #64748b; stroke-width: 0.8; stroke-dasharray: 2 2; fill: #64748b; font-size: 10px; }
+  .face-name { font-size: 12px; font-weight: 700; fill: #1d4ed8; }
   .door-mark { pointer-events: none; }
   .door-label { pointer-events: none; font-weight: 600; }
   .hint { font-size: 12px; color: #6b7280; margin: 4px 0; min-height: 16px; }
@@ -76,6 +78,7 @@
       <button class="tool" data-tool="grid"   title="helpers: place master grid line, then derived lines (g)">⊞ grid</button>
       <button class="tool" data-tool="sel"    title="idle">✥ idle</button>
       <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
+      <button id="btnDims" class="tool" title="toggle dimension lines (segments + face extents)">📏 dims</button>
     </div>
     <div class="hint" id="drawHint">draw: click = vertex, the chain continues, double-click ends it. snapping: green ring = existing point, green wall = riding a line, orange guide = draw locked perpendicular to that wall (angular, fires anywhere on the ray), dashed from last point = axis/45°. split: click on a line splits it. face: click a region to tag it as a room.</div>
     <svg id="c" width="100%"></svg>
@@ -93,6 +96,8 @@
     <h2>region under the cursor</h2>
     <label>key <input id="fKey" placeholder="living"></label>
     <label>display label <input id="fLbl" placeholder="living"></label>
+    <label>name (shown on the canvas) <input id="fRegionName" placeholder="Living room"></label>
+    <label>description <textarea id="fRegionDescr" rows="2" style="width:100%;resize:vertical"></textarea></label>
     <label>items (fnmatch, comma) <input id="fItems" placeholder="slaap.*, B*-woon"></label>
     <label>region colour <input id="fColor" type="color" value="#9fc6e8" disabled>
       <input id="fColorUse" type="checkbox" disabled> use this colour</label>
@@ -212,7 +217,28 @@ function draw(){
       fill="${own}" fill-opacity="${f.label ? 0.55 : 0.3}"
       stroke="#ffffff" stroke-width="8"/>`);
     const [tx, ty] = m2vb(f.centroid[0], f.centroid[1]);
-    parts.push(`<text class="facelabel" x="${tx}" y="${ty}" text-anchor="middle">${(f.label ? f.label + " · " : "")}${fmt(f.area)} m2</text>`);
+    if (f.name) parts.push(`<text class="facelabel face-name" x="${tx}" y="${ty - 12}" text-anchor="middle">${f.name}</text>`);
+    parts.push(`<text class="facelabel" x="${tx}" y="${ty + 3}" text-anchor="middle">${(f.label ? f.label + " · " : "")}${fmt(f.area)} m2</text>`);
+  }
+  if (showDims){
+    draft.segments.forEach(sg => {
+      const dx = sg.x1 - sg.x0, dy = sg.y1 - sg.y0;
+      const L = Math.hypot(dx, dy);
+      if (L < 1e-9) return;
+      const horiz = Math.abs(dy) < 1e-9, vert = Math.abs(dx) < 1e-9;
+      if (horiz){
+        const yo = sg.y0 + 0.8;
+        const [a,b] = m2vb(sg.x0, yo), [c,d] = m2vb(sg.x1, yo);
+        parts.push(`<line class="dim" x1="${fmt(a)}" y1="${fmt(b)}" x2="${fmt(c)}" y2="${fmt(d)}"/>`);
+        parts.push(`<text class="dim" x="${fmt((a+c)/2)}" y="${fmt(b + 8)}" text-anchor="middle">${fmt(L)} m</text>`);
+      } else if (vert){
+        const xo = sg.x0 + 0.8;
+        const [a,b] = m2vb(xo, sg.y0), [c,d] = m2vb(xo, sg.y1);
+        parts.push(`<line class="dim" x1="${fmt(a)}" y1="${fmt(b)}" x2="${fmt(c)}" y2="${fmt(d)}"/>`);
+        const mx = (a+c)/2, my = (b+d)/2;
+        parts.push(`<text class="dim" x="${fmt(mx + 6)}" y="${fmt(my)}" transform="rotate(90 ${fmt(mx + 6)} ${fmt(my)})" text-anchor="middle">${fmt(L)} m</text>`);
+      }
+    });
   }
   // helper grid lines (construction geometry: constructed rather than wall)
   for (const hl of helperLines()){
@@ -343,6 +369,8 @@ function bindLayer(){
       if (pendingTag){
         fKey.value = pendingTag.key || suggestedKey(pendingTag);
         fLbl.value = pendingTag.label || "";
+        fRegionName.value = pendingTag.name || "";
+        fRegionDescr.value = pendingTag.description || "";
         fItems.value = (pendingTag.items || []).join(", ");
         fAmin.value = pendingTag.area_min ?? "";
         fAmax.value = pendingTag.area_max ?? "";
@@ -794,6 +822,8 @@ document.getElementById("btnTag").addEventListener("click", () => {
   const tag = {
     key: fKey.value.trim() || suggestedKey(),
     label: fLbl.value.trim(),
+    name: fRegionName.value.trim(),
+    description: fRegionDescr.value.trim(),
     items: fItems.value.split(",").map(s => s.trim()).filter(Boolean),
     area_min: fAmin.value === "" ? null : Number(fAmin.value),
     area_max: fAmax.value === "" ? null : Number(fAmax.value),
@@ -880,6 +910,15 @@ document.getElementById("btnApply").addEventListener("click", () => {
 });
 document.getElementById("btnClearSolved").addEventListener("click", () => {
   draft._solved = null; draw(); feedback("solution overlay cleared.");
+});
+let showDims = false;
+document.getElementById("btnDims").addEventListener("click", () => {
+  showDims = !showDims;
+  const b = document.getElementById("btnDims");
+  b.classList.toggle("active", showDims);
+  b.textContent = showDims ? "\u22a0 dims (on)" : "\U0001F4CF dims";
+  draw();
+  feedback(showDims ? "dimension lines on." : "dimension lines off.");
 });
 function feedback(msg){ document.getElementById("feedback").textContent = msg; }
 

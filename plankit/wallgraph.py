@@ -195,6 +195,8 @@ class WallGraphDraft:
                     "key": (tag or {}).get("key"),
                     "color": (tag or {}).get("color"),
                     "label": (tag or {}).get("label", ""),
+                    "name": (tag or {}).get("name", ""),
+                    "description": (tag or {}).get("description", ""),
                     "items": (tag or {}).get("items", []),
                     "area_min": (tag or {}).get("area_min"),
                     "area_max": (tag or {}).get("area_max"),
@@ -247,9 +249,16 @@ def draft_preview_svg(draft: WallGraphDraft, faces: Optional[List[dict]] = None)
         )
         cx = sum(v[0] for v in f["verts"]) / len(f["verts"])
         cy = sum(v[1] for v in f["verts"]) / len(f["verts"])
+        name_line = (f.get("name") or "")
         placement = f"{tag} · {f['area']:.1f} m²" if tag else f"{f['area']:.1f} m²"
+        y_text = sy(cy)
+        if name_line:
+            parts.append(
+                f'<text x="{sx(cx):.1f}" y="{y_text - 12:.1f}" text-anchor="middle" '
+                f'font-size="12" font-weight="700" fill="#1d4ed8">{name_line}</text>'
+            )
         parts.append(
-            f'<text x="{sx(cx):.1f}" y="{sy(cy):.1f}" text-anchor="middle" '
+            f'<text x="{sx(cx):.1f}" y="{y_text:.1f}" text-anchor="middle" '
             f'font-size="12" fill="#111827">{placement}</text>'
         )
     for i, seg in enumerate(draft.segments):
