@@ -492,7 +492,11 @@ function projectOnSeg(m, s){
 function gatherSnapCandidates(m, prev, tolM){
   const cands = [], seenPts = new Set();
   const add = (c) => {
-    const k = c.m.map(v => Number(v)).map(v => v.toFixed(6)).join(",");
+    // Key by kind+coordinate rather than coordinate alone: a perp candidate
+    // whose locked point coincides with an on-wall projection is still a
+    // *different kind of snap* and must survive, or compound generation loses
+    // its perpendicular contributor and the cursor can silently drift.
+    const k = c.kind + "|" + c.m.map(v => Number(v)).map(v => v.toFixed(6)).join(",");
     if (seenPts.has(k)) return;
     seenPts.add(k); cands.push(c);
   };
@@ -569,43 +573,71 @@ function gatherSnapCandidates(m, prev, tolM){
   //    The landing point therefore satisfies both at once. Only include
   //    composites that actually stay on (or cross-proximate to) geometry, so
   //    the cursor "lands" on real walls instead of drifting into free space.
-  // Compound snaps: a point that satisfies more than one simple snap at once
-  // (for instance x as the perpendicular lock onto one wall, y riding
-  //  a projection onto another). They light up an intersection whose
-  //  coordinates each come from a genuine perp / on-wall / axis constraint.
-  //  Rather than restricting to partial / single-axis sources (which hide
-  //  perp and on-seg combinations), pair every candidate with every other
-  //  one and only keep intersections that are still inside the cursor
-  //  tolerance — every input was already verified against the same tool budget.
-  if (prev || draft.segments.length){
-    const MAX = tolM;    // compound must be at least as close as one snap
-    const pool = cands.slice();
-    for (let i = 0, N = pool.length; i < N; i++){
-      for (let j = i + 1; j < N; j++){
-        const A = pool[i], B = pool[j];
-        // user-defined compound: a perpendicular lock PLUS another snap
-        // contributor (usually an on-segment projection) must be involved.
-        if (A.kind !== "perp" && B.kind !== "perp") continue;
-        const combos = [
-          [A.m[0], B.m[1]],
-          [B.m[0], A.m[1]],
-        ];
-        for (const [x, y] of combos){
-          if (x === undefined || y === undefined) continue;
-          const dx = x - m[0], dy = y - m[1];
-          if ((dx*dx + dy*dy) > MAX*MAX) continue;
-          // Skip combinations that reproduce an already-present candidate (a
-          // `joint` / `perp` / `onseg` already covers the same location);
-          // keep exact `simult` candidates only when they genuinely new so
-          // user sees the combination without a redundant duplicate.
-          let already = false;
-          for (const c of cands){
-            if (c.m[0] === x && c.m[1] === y){ already = true; break; }
-          }
-          if (already) continue;
-          add({ m: [fmt(x), fmt(y)], kind: "simult", ref: null,
-                dist: Math.hypot(x-m[0], y-m[1]), tier: -1, axis: "both" });
+  // ── compound snaps: point = (perpendicular lock) ∩ (on-wall or grid) ─
+  // Intersect the perpendicular line itself (through the chain origin and
+  // orthogonal to the reference wall) with the *other* candidate's line
+  // instead of mixing individual X/Y numbers. That way a compound point is
+  // provably on the segment AND perpendicular to the reference wall, so a
+  // `simult` label can never lie about one of the two constraints.
+  function linesCross(p1, d1, p2, d2){
+    const det = d1[0]*d2[1] - d1[1]*d2[0];
+    if (Math.abs(det) < 1e-12) return null;              // parallel
+    const t = ((p2[0]-p1[0])*d2[1] - (p2[1]-p1[1])*d2[0]) / det;
+    return [p1[0] + d1[0]*t, p1[1] + d1[1]*t];
+  }
+  if (prev){
+    const MAX = tolM;
+    // Build the perpendicular sources from the drawing itself (the same
+    // near-orthogonal test the `perp` candidate uses) so a compound is still
+    // generated even when the ordinary `perp` snap is NOT active at the
+    // cursor — e.g. when the cursor has drifted a few degrees off the exact
+    // perpendicular but is still inside the snap tolerance. This removes the
+    // child-dependency that used to make compound snapping unreliable.
+    const perps = [];
+    for (const s of draft.segments){
+      const vx = m[0] - prev[0], vy = m[1] - prev[1];
+      const vlen = Math.hypot(vx, vy);
+      if (vlen < 0.1) continue;
+      const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
+      if (len < 1e-9) continue;
+      const nDot = Math.abs((vx*(dx/len) + vy*(dy/len)) / vlen);
+      if (!(nDot < 0.07)) continue;
+      let px = dy/len, py = -dx/len;
+      if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
+      perps.push({ ref: [s, [prev[0], prev[1], px, py]] });
+    }
+    for (const P of perps){
+      const [sx, sy, px, py] = P.ref[1];
+      for (const O of cands){
+        if (O === P) continue;
+        let lineInfo = null;
+        if (O.kind === "onseg" && O.ref)
+          lineInfo = { p: [O.ref.x0, O.ref.y0],
+                       d: [O.ref.x1 - O.ref.x0, O.ref.y1 - O.ref.y0],
+                       ref: O };
+        else if (O.kind === "grid" && O.ref)
+          lineInfo = { p: (O.ref.axis === "vertical")
+                              ? [O.ref.pos, 0] : [0, O.ref.pos],
+                       d: (O.ref.axis === "vertical") ? [0,1] : [1,0],
+                       ref: O };
+        if (!lineInfo || Math.hypot(lineInfo.d[0], lineInfo.d[1]) < 1e-9) continue;
+        const I = linesCross([sx, sy], [px, py], lineInfo.p, lineInfo.d);
+        if (!I) continue;
+        // reject intersections that fall outside (or a hair beyond) the
+        // actual volume of the on-wall / helper line being crossed
+        const dL = lineInfo.d, L2 = dL[0]*dL[0] + dL[1]*dL[1];
+        const tt = ((I[0] - lineInfo.p[0])*dL[0] + (I[1] - lineInfo.p[1])*dL[1]) / L2;
+        if (tt < -0.05 || tt > 1.05) continue;
+        const dI = Math.hypot(I[0]-m[0], I[1]-m[1]);
+        if (dI > MAX) continue;
+        // skip points already offered by a simpler candidate
+        let already = false;
+        for (const c of cands){
+          if (Math.abs(c.m[0]-I[0]) < 1e-9 && Math.abs(c.m[1]-I[1]) < 1e-9){ already = true; break; }
         }
+        if (already) continue;
+        add({ m: [fmt(I[0]), fmt(I[1])], kind: "simult", ref: [P, lineInfo.ref],
+              dist: dI, tier: -2, axis: "both" });
       }
     }
   }
@@ -1464,5 +1496,27 @@ if (demo){
 
 
 
+
+
+<!-- dbg -->
+<script>
+setTimeout(function(){
+  try {
+    draft = {
+      kind:"wallgraph", name:"debug", description:"",
+      envelope:{x0:-1,x1:11,y0:-1,y1:11}, grid:1, helpers:{master:null,lines:[]},
+      segments:[
+        {x0:0,y0:3,x1:5,y1:3},     // horizontal reference wall
+        {x0:1,y0:0,x1:1,y1:5},     // vertical wall crossed by the perpendicular
+      ],
+      bindings:[], faces:[], edges:{}, _faces:[]
+    };
+    var m = [1.0, 3.05], prev = [1, 1];   // moving vertically => perp to horizontal wall
+    var cand = gatherSnapCandidates(m, prev, 11 / layout().s);
+    var d = document.createElement("div"); d.id="dbgout"; document.body.appendChild(d);
+    d.textContent = cand.map(function(c){return c.kind+"@"+c.m.join(",")}).join(" \u00b7 ");
+  } catch(err){ var d=document.createElement("div"); d.id="dbgout"; document.body.appendChild(d); d.textContent="ERR:"+err.message; }
+}, 2000);
+</script>
 </body>
 </html>
