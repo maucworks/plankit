@@ -864,10 +864,22 @@ function pointOnSeg(px, py, s){
          t >= -1e-9 && t <= 1+1e-9;
 }
 
+function nearestExistingJoint(pt, tolM){
+  let best = null, best_d = tolM;
+  for (const p of allJoints()){
+    const d = Math.hypot(p[0]-pt[0], p[1]-pt[1]);
+    if (d < best_d){ best = p; best_d = d; }
+  }
+  return best;
+}
 function chainAt(ev){
   const L = layout();
   let base = meters(ev, false);
   if (curSnap && curSnap.m) base = curSnap.m;         // the previewed snap is the truth
+  // Snap chain endpoints/junctions already present on a wall: this makes sure the split
+  // segment meets them exactly so noding (nodeAllStrokes) actually divides the room.
+  const nearbyJoint = nearestExistingJoint(base, 0.1);
+  if (nearbyJoint) base = nearbyJoint;
   if (!chain){ chain = { first: [base[0], base[1]], last: [base[0], base[1]] };
     feedback("chain started — the green ring = existing point, the orange guide = perpendicular to a wall."); return; }
   // treat a compound snap (or any snap landing on a point coincident with the
