@@ -556,51 +556,40 @@ function gatherSnapCandidates(m, prev, tolM){
   //    The landing point therefore satisfies both at once. Only include
   //    composites that actually stay on (or cross-proximate to) geometry, so
   //    the cursor "lands" on real walls instead of drifting into free space.
-  // Compound snaps: a point whose X is fixed by an x-axis constraint and
-  // whose Y is fixed by a y-axis constraint. These are the "perpendicular
-  // foot on one wall while on the other" landings. They are built ONLY from
-  // single-axis candidates (not multi-coordinate ones) because those are
-  // the knobs the author picks through Tab; full snaps are self-sufficient.
+  // Compound snaps: a point that satisfies more than one simple snap at once
+  // (for instance x as the perpendicular lock onto one wall, y riding
+  //  a projection onto another). They light up an intersection whose
+  //  coordinates each come from a genuine perp / on-wall / axis constraint.
+  //  Rather than restricting to partial / single-axis sources (which hide
+  //  perp and on-seg combinations), pair every candidate with every other
+  //  one and only keep intersections that are still inside the cursor
+  //  tolerance — every input was already verified against the same tool budget.
   if (prev || draft.segments.length){
-    const MAX = Math.max(tolM * 3, 0.15);
-    const xFix = cands.filter(c => c.axis === "x" || c.axis === "edge");
-    const yFix = cands.filter(c => c.axis === "y" || c.axis === "edge");
-    for (const ca of xFix){
-      for (const cb of yFix){
-        if (ca === cb) continue;   // already a full snap elsewhere
-        let x = ca.m[0], y = cb.m[1];
-        if (x === undefined || y === undefined) continue;
-        // distance from raw cursor to the composite intersection is what matters
-        const dx = x - m[0], dy = y - m[1];
-        if ((dx*dx + dy*dy) > MAX*MAX) continue;
-        // geometry validation: composite rests on at least one wall, or is
-        // the intersection of two real axes (grid walls/joint axes)
-        let onWall = false;
-        for (const seg of draft.segments){
-          const pr = projectOnSeg([x,y], seg);
-          if (pr && pr.dist <= tolM){ onWall = true; break; }
-        }
-        if (!onWall){
-          // allow crossing of a vertical and a horizontal grid line
-          const hl = helperLines ? helperLines() : [];
-          let hOk = false;
-          // vertical helper => x fixed; horizontal => y fixed
-          for (const l of hl){
-            if (l.axis === "vertical" && Math.abs(l.pos - x) <= tolM) hOk = true;
-            if (l.axis === "horizontal" && Math.abs(l.pos - y) <= tolM) hOk = true;
+    const MAX = tolM;    // compound must be at least as close as one snap
+    const pool = cands.slice();
+    for (let i = 0, N = pool.length; i < N; i++){
+      for (let j = i + 1; j < N; j++){
+        const A = pool[i], B = pool[j];
+        const combos = [
+          [A.m[0], B.m[1]],
+          [B.m[0], A.m[1]],
+        ];
+        for (const [x, y] of combos){
+          if (x === undefined || y === undefined) continue;
+          const dx = x - m[0], dy = y - m[1];
+          if ((dx*dx + dy*dy) > MAX*MAX) continue;
+          // Skip combinations that reproduce an already-present candidate (a
+          // `joint` / `perp` / `onseg` already covers the same location);
+          // keep exact `simult` candidates only when they genuinely new so
+          // user sees the combination without a redundant duplicate.
+          let already = false;
+          for (const c of cands){
+            if (c.m[0] === x && c.m[1] === y){ already = true; break; }
           }
-          // also allow vertex-only (joint) intersections
-          const nearJoy = allJoints().some(j => Math.hypot(j[0]-x, j[1]-y) <= tolM);
-          const onJoint = allJoints().some(j => j[0] === x && j[1] === y);
-          if (!(nearJoy || onJoint)) continue;
-          // restrict to either a helper crossing pair or proximity to joint
-          const hVertical = hl.some(l => l.axis === "vertical" && Math.abs(l.pos - x) <= tolM);
-          const hHorizontal = hl.some(l => l.axis === "horizontal" && Math.abs(l.pos - y) <= tolM);
-          if (!((hVertical && hHorizontal))) continue;
+          if (already) continue;
+          add({ m: [fmt(x), fmt(y)], kind: "simult", ref: null,
+                dist: Math.hypot(x-m[0], y-m[1]), tier: -1, axis: "both" });
         }
-        // distinct from any single-constraint candidate is fine (dedup cleans later)
-        add({ m: [fmt(x), fmt(y)], kind: "simult", ref: null,
-              dist: Math.hypot(x-m[0], y-m[1]), tier: -1, axis: "both" });
       }
     }
   }
@@ -626,6 +615,23 @@ let snapCandidates = [], snapActiveIdx = 0, lastRawMForSnap = null,
     lastPrevForSnap = null, lastTolMForSnap = 0.1;
 function renderSnapFx(snap){
   let parts = "";
+  // show every viable candidate (excluding free) subtly, so when two snaps
+  // like a perpendicular and an on-wall projection are both satisfied the
+  // author can see them light up together.
+  for (const cc of (snapCandidates || [])){
+    if (!cc.m || cc.kind === "free") continue;
+    const [cx, cy] = m2vb(cc.m[0], cc.m[1]);
+    const col = cc.kind === "joint"   ? "#059669"
+               : cc.kind === "onseg"   ? "#2563eb"
+               : cc.kind === "perp"    ? "#f97316"
+               : cc.kind === "snap"? "#f97316"
+               : "#93c5fd";
+    const isWide = (snap && cc.m[0] === snap.m[0] && cc.m[1] === snap.m[1]);
+    if (isWide) continue;   // the active one gets its own highlight later
+    parts += `<circle cx="${fmt(cx)}" cy="${fmt(cy)}" r="2.6" `
+    + `fill="${col}" stroke="#111827" stroke-width="0.6" opacity="0.45" `
+    + `pointer-events="none"/>`;
+  }
   if (snap && snap.kind === "joint" && snap.ref)
     parts += `<circle cx="${m2vb(snap.ref[0], snap.ref[1])[0]}" cy="${m2vb(snap.ref[0], snap.ref[1])[1]}"
       r="7" fill="none" stroke="#059669" stroke-width="2.5"/>`;
@@ -1401,6 +1407,7 @@ if (demo){
   solveDraft().then(gateDraft);
 }
 </script>
+
 
 </body>
 </html>
