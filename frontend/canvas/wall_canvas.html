@@ -358,7 +358,27 @@ function bindLayer(){
       if (tool !== "vertex" && tool !== "edit") return;
       ev.stopPropagation();
       const pt = c.dataset.pt.split(",").map(Number);
-      vertexDrag = { orig: [pt[0], pt[1]], work: [pt[0], pt[1]], segIdxList: c.dataset.segs.split(",").map(Number) };
+      vertexDrag = { orig: [pt[0], pt[1]], work: [pt[0], pt[1]], segIdxList: c.dataset.segs.split(",").map(Number), armSeg: -1 };
+      if (ev.altKey || ev.shiftKey){
+        feedback("peeling one arm (continue holding during the drag)");
+        const raw = meters(ev, false);
+        const dirX = raw[0] - pt[0], dirY = raw[1] - pt[1];
+        const dirNorm = Math.hypot(dirX, dirY) || 1;
+        let bestIdx=-1, bestCos=-1;
+        vertexDrag.segIdxList.forEach(di => {
+          const sg = draft.segments[di];
+          if (!sg) return 0;
+          let otherX, otherY;
+          const d0 = Math.hypot(sg.x0 - pt[0], sg.y0 - pt[1]);
+          const d1 = Math.hypot(sg.x1 - pt[0], sg.y1 - pt[1]);
+          if (d0 < 1e-6 && sg.x0 <= sg.x0){ otherX = sg.x1; otherY = sg.y1; } else if (d1 < 1e-6){ otherX = sg.x0; otherY = sg.y0; } else return 0;
+          const base = Math.hypot(otherX-pt[0], otherY-pt[1]) || 1;
+          const cos = ( (otherX-pt[0])*dirX + (otherY-pt[1])*dirY ) / (base*dirNorm);
+          if (cos > bestCos){ bestCos = cos; bestIdx = di; }
+          return 0;
+        });
+        vertexDrag.armSeg = bestIdx;
+      }
       if (tool === "edit"){
         selection = { type: "joint", pt: [pt[0], pt[1]], segs: vertexDrag.segIdxList.slice() };
         document.getElementById("selInfo").textContent = "vertex [" + pt.map(fmt).join(", ") + "] · " + selection.segs.length + " strokes";
@@ -988,7 +1008,11 @@ svg.addEventListener("pointermove", ev => {
       if (Math.abs(mx - vertexDrag.work[0]) < 0.05 && Math.abs(my - vertexDrag.work[1]) < 0.05) return;
       const o = vertexDrag.orig;
       vertexDrag.work = [mx, my];
-      vertexDrag.segIdxList.forEach(i => {
+      if (vertexDrag.armSeg >= 0){
+        const s = draft.segments[vertexDrag.armSeg];
+        if (s && (Math.abs(s.x0 - o[0]) < 1e-6 && Math.abs(s.y0 - o[1]) < 1e-6)){ s.x0 = mx; s.y0 = my; }
+        else if (s){ s.x1 = mx; s.y1 = my; }
+      } else vertexDrag.segIdxList.forEach(i => {
         const s = draft.segments[i];
         if (Math.abs(s.x0 - o[0]) < 1e-6 && Math.abs(s.y0 - o[1]) < 1e-6){ s.x0 = mx; s.y0 = my; }
         else if (Math.abs(s.x1 - o[0]) < 1e-6 && Math.abs(s.y1 - o[1]) < 1e-6){ s.x1 = mx; s.y1 = my; }
