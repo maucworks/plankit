@@ -961,6 +961,16 @@ function splitSegmentAt(idx, ev){
   feedback("split segment " + idx + " at [" + mx + ", " + my + "].");
 }
 
+function metersRaw(ev){
+  const p = pointerView(ev);
+  const L = layout();
+  const mx = draft.envelope.x0 + (p.x - L.ox) / L.s;
+  const my = draft.envelope.y1 - (p.y - L.oy) / L.s;
+  const cx = Math.min(Math.max(mx, draft.envelope.x0), draft.envelope.x1);
+  const cy = Math.min(Math.max(my, draft.envelope.y0), draft.envelope.y1);
+  return [Math.round(cx * 100) / 100, Math.round(cy * 100) / 100];
+}
+
 function meters(ev, snapLoose){
   const p = pointerView(ev);
   const L = layout();
