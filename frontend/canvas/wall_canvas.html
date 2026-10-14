@@ -492,43 +492,26 @@ function projectOnSeg(m, s){
 function gatherSnapCandidates(m, prev, tolM){
   const cands = [], seenPts = new Set();
   const add = (c) => {
-    // Key by kind+coordinate rather than coordinate alone: a perp candidate
-    // whose locked point coincides with an on-wall projection is still a
-    // *different kind of snap* and must survive, or compound generation loses
-    // its perpendicular contributor and the cursor can silently drift.
-    const k = c.kind + "|" + c.m.map(v => Number(v)).map(v => v.toFixed(6)).join(",");
+    const k = c.m.map(v => Number(v)).map(v => v.toFixed(6)).join(",");
     if (seenPts.has(k)) return;
     seenPts.add(k); cands.push(c);
   };
-  // 0. latched compound: while the cursor remains near the compound's actual
-  //    point, keep serving that exact point as a candidate even if another
-  //    candidate-generation pass this frame happened not to recreate it.
-  if (snapLock && snapLock.kind === "simult"){
-    const d = Math.hypot(snapLock.pt[0]-m[0], snapLock.pt[1]-m[1]);
-    if (d <= tolM * 4)
-      add({ m: snapLock.pt.slice(), kind: "simult", ref: null, dist: d, tier: -3, axis: "both" });
-  }
   // 1. joints already on the drawing
   for (const p of allJoints()){
     const d = Math.hypot(p[0] - m[0], p[1] - m[1]);
-    if (d <= tolM) add({ m: [p[0], p[1]], kind: "joint", ref: p, dist: d, tier: 0, axis: "both" });
+    if (d <= tolM) add({ m: [p[0], p[1]], kind: "joint", ref: p, dist: d, tier: 0 });
   }
   // 2. on-wall snapping (riding a drawn stroke)
   for (const seg of draft.segments){
     const pr = projectOnSeg(m, seg);
-    if (pr && pr.dist <= tolM){
-      const ax = Math.abs(seg.x1 - seg.x0) < 1e-9 ? "x"
-               : Math.abs(seg.y1 - seg.y0) < 1e-9 ? "y" : "edge";
-      add({ m: pr.pt.slice(), kind: "onseg", ref: seg, dist: pr.dist, tier: 1, axis: ax });
-    }
+    if (pr && pr.dist <= tolM) add({ m: pr.pt.slice(), kind: "onseg", ref: seg, dist: pr.dist, tier: 1 });
   }
   // 2b. helper grid lines
   for (const hl of helperLines()){
     const dv = hl.axis === "vertical" ? Math.abs(m[0] - hl.pos) : Math.abs(m[1] - hl.pos);
     if (dv <= tolM)
       add({ m: hl.axis === "vertical" ? [hl.pos, m[1]] : [m[0], hl.pos],
-            kind: "grid", ref: hl, dist: dv, tier: 2,
-            axis: hl.axis === "vertical" ? "x" : "y" });
+            kind: "grid", ref: hl, dist: dv, tier: 2 });
   }
   if (prev){
     // 3. perpendicular lock — one candidate per wall that is (near-)orthogonal
@@ -542,106 +525,29 @@ function gatherSnapCandidates(m, prev, tolM){
           let px = dy/len, py = -dx/len;
           if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
           const locked = [fmt(prev[0] + vlen*px), fmt(prev[1] + vlen*py)];
-          const cdist = Math.hypot(locked[0]-m[0], locked[1]-m[1]);
-          // a perp candidate only participates if it is actually within the
-          // ordinary snap tolerance; a far perpendicular ray should never
-          // overpower the joint / on-wall / compound candidates and cause
-          // the cursor to jump out of the current snap zone.
-          if (cdist <= tolM) add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
-               dist: cdist, tier: -1, axis: "both" });
+          add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
+               dist: Math.hypot(locked[0]-m[0], locked[1]-m[1]), tier: 3 });
         }
       }
     }
     // 4. ortho (axis-locked from prev)
     if (Math.abs(m[1] - prev[1]) <= tolM)
       add({ m: [fmt(m[0]), fmt(prev[1])], kind: "ortho", ref: null,
-            dist: Math.abs(m[1]-prev[1]), tier: 4, axis: "x" });
+            dist: Math.abs(m[1]-prev[1]), tier: 4 });
     if (Math.abs(m[0] - prev[0]) <= tolM)
       add({ m: [fmt(prev[0]), fmt(m[1])], kind: "ortho", ref: null,
-            dist: Math.abs(m[0]-prev[0]), tier: 4, axis: "y" });
+            dist: Math.abs(m[0]-prev[0]), tier: 4 });
     // 5. 45-degree diagonal
     if (Math.abs(Math.abs(m[0]-prev[0]) - Math.abs(m[1]-prev[1])) < tolM){
       const d = Math.max(Math.abs(m[0]-prev[0]), Math.abs(m[1]-prev[1]));
       const sx = m[0] >= prev[0] ? 1 : -1, sy = m[1] >= prev[1] ? 1 : -1;
       const pt = [fmt(prev[0]+d*sx), fmt(prev[1]+d*sy)];
       add({ m: pt, kind: "diag", ref: null,
-            dist: Math.hypot(pt[0]-m[0], pt[1]-m[1]), tier: 5, axis: "both" });
+            dist: Math.hypot(pt[0]-m[0], pt[1]-m[1]), tier: 5 });
     }
   }
-  // ── simultaneous snaps: an intersection of two independent constraints
-  //    (for instance x from a wall, y from a perpendicular to another wall).
-  //    The landing point therefore satisfies both at once. Only include
-  //    composites that actually stay on (or cross-proximate to) geometry, so
-  //    the cursor "lands" on real walls instead of drifting into free space.
-  // ── compound snaps: point = (perpendicular lock) ∩ (on-wall or grid) ─
-  // Intersect the perpendicular line itself (through the chain origin and
-  // orthogonal to the reference wall) with the *other* candidate's line
-  // instead of mixing individual X/Y numbers. That way a compound point is
-  // provably on the segment AND perpendicular to the reference wall, so a
-  // `simult` label can never lie about one of the two constraints.
-  function linesCross(p1, d1, p2, d2){
-    const det = d1[0]*d2[1] - d1[1]*d2[0];
-    if (Math.abs(det) < 1e-12) return null;              // parallel
-    const t = ((p2[0]-p1[0])*d2[1] - (p2[1]-p1[1])*d2[0]) / det;
-    return [p1[0] + d1[0]*t, p1[1] + d1[1]*t];
-  }
-  if (prev){
-    const MAX = tolM;
-    // Build the perpendicular sources from the drawing itself (the same
-    // near-orthogonal test the `perp` candidate uses) so a compound is still
-    // generated even when the ordinary `perp` snap is NOT active at the
-    // cursor — e.g. when the cursor has drifted a few degrees off the exact
-    // perpendicular but is still inside the snap tolerance. This removes the
-    // child-dependency that used to make compound snapping unreliable.
-    const perps = [];
-    for (const s of draft.segments){
-      const vx = m[0] - prev[0], vy = m[1] - prev[1];
-      const vlen = Math.hypot(vx, vy);
-      if (vlen < 0.1) continue;
-      const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
-      if (len < 1e-9) continue;
-      const nDot = Math.abs((vx*(dx/len) + vy*(dy/len)) / vlen);
-      if (!(nDot < 0.07)) continue;
-      let px = dy/len, py = -dx/len;
-      if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
-      perps.push({ ref: [s, [prev[0], prev[1], px, py]] });
-    }
-    for (const P of perps){
-      const [sx, sy, px, py] = P.ref[1];
-      for (const O of cands){
-        if (O === P) continue;
-        let lineInfo = null;
-        if (O.kind === "onseg" && O.ref)
-          lineInfo = { p: [O.ref.x0, O.ref.y0],
-                       d: [O.ref.x1 - O.ref.x0, O.ref.y1 - O.ref.y0],
-                       ref: O };
-        else if (O.kind === "grid" && O.ref)
-          lineInfo = { p: (O.ref.axis === "vertical")
-                              ? [O.ref.pos, 0] : [0, O.ref.pos],
-                       d: (O.ref.axis === "vertical") ? [0,1] : [1,0],
-                       ref: O };
-        if (!lineInfo || Math.hypot(lineInfo.d[0], lineInfo.d[1]) < 1e-9) continue;
-        const I = linesCross([sx, sy], [px, py], lineInfo.p, lineInfo.d);
-        if (!I) continue;
-        // reject intersections that fall outside (or a hair beyond) the
-        // actual volume of the on-wall / helper line being crossed
-        const dL = lineInfo.d, L2 = dL[0]*dL[0] + dL[1]*dL[1];
-        const tt = ((I[0] - lineInfo.p[0])*dL[0] + (I[1] - lineInfo.p[1])*dL[1]) / L2;
-        if (tt < -0.05 || tt > 1.05) continue;
-        const dI = Math.hypot(I[0]-m[0], I[1]-m[1]);
-        if (dI > MAX) continue;
-        // skip points already offered by a simpler candidate
-        let already = false;
-        for (const c of cands){
-          if (Math.abs(c.m[0]-I[0]) < 1e-9 && Math.abs(c.m[1]-I[1]) < 1e-9){ already = true; break; }
-        }
-        if (already) continue;
-        add({ m: [fmt(I[0]), fmt(I[1])], kind: "simult", ref: [P, lineInfo.ref],
-              dist: dI, tier: -2, axis: "both" });
-      }
-    }
-  }
-  add({ m: [fmt(m[0]), fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6, axis: "both" });
+  // always: the raw cursor itself
+  add({ m: [fmt(m[0]), fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 });
   cands.sort((a,b) => a.tier - b.tier || a.dist - b.dist);
   return cands;
 }
@@ -652,10 +558,6 @@ function snapPoint(m, prev, tolM, forceIdx){
   if (forceIdx == null) snapActiveIdx = 0;
   else snapActiveIdx = Math.max(0, Math.min(cands.length-1, forceIdx));
   idx = snapActiveIdx;
-  if (cands[idx] && cands[idx].kind === "simult")
-    snapLock = { pt: cands[idx].m.slice(), kind: "simult" };
-  else if (!cands.length || cands[idx].kind === "free")
-    snapLock = null;
   const base = cands.length ? cands[idx] : { m: [fmt(m[0]),fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 };
   const out = { m: base.m.slice(), kind: base.kind, ref: base.ref,
                 candCount: cands.length || 1, candIdx: idx };
@@ -665,42 +567,8 @@ function snapPoint(m, prev, tolM, forceIdx){
 let curSnap = { m: null, kind: "free", ref: null, candCount: 0, candIdx: 0 };   // shared draw state
 let snapCandidates = [], snapActiveIdx = 0, lastRawMForSnap = null,
     lastPrevForSnap = null, lastTolMForSnap = 0.1;
-// once a true compound (perp + on-wall) appears, we "latch" onto it so the
-// cursor cannot fall out of it by a few pixels — it stays locked as the
-// chosen snap until the author presses Tab or moves far outside the snap
-// zone. Without this, wiggle *out of* the compound into free space was possible.
-let snapLock = null;   // { pt:[x,y], kind:"simult" }
 function renderSnapFx(snap){
   let parts = "";
-  // show every viable candidate (excluding free) subtly, so when two snaps
-  // like a perpendicular and an on-wall projection are both satisfied the
-  // author can see them light up together.
-  for (const cc of (snapCandidates || [])){
-    if (!cc.m || cc.kind === "free") continue;
-    const [cx, cy] = m2vb(cc.m[0], cc.m[1]);
-    const col = cc.kind === "joint"   ? "#059669"
-               : cc.kind === "onseg"   ? "#2563eb"
-               : cc.kind === "perp"    ? "#f97316"
-               : cc.kind === "snap"? "#f97316"
-               : "#93c5fd";
-    const isWide = (snap && cc.m[0] === snap.m[0] && cc.m[1] === snap.m[1]);
-    if (isWide) continue;   // the active one gets its own highlight later
-    parts += `<circle cx="${fmt(cx)}" cy="${fmt(cy)}" r="2.6" `
-    + `fill="${col}" stroke="#111827" stroke-width="0.6" opacity="0.45" `
-    + `pointer-events="none"/>`;
-    // show every perpendicular lock as a dashed line even when it is only a
-    // bystander, otherwise the perpendicular contribution is invisible.
-    if (cc.kind === "perp" && cc.ref && cc.ref[1]){
-      const [sx, sy, nx, ny] = cc.ref[1];
-      const a = 28;
-      parts += `<line x1="${m2vb(sx - nx*a, sy - ny*a)[0]}" ` +
-               `y1="${m2vb(sx - nx*a, sy - ny*a)[1]}" ` +
-               `x2="${m2vb(sx + nx*a, sy + ny*a)[0]}" ` +
-               `y2="${m2vb(sx + nx*a, sy + ny*a)[1]}" ` +
-               `stroke="#f97316" stroke-width="1.3" stroke-dasharray="4 3" `
-               + `opacity="0.75" pointer-events="none"/>`;
-    }
-  }
   if (snap && snap.kind === "joint" && snap.ref)
     parts += `<circle cx="${m2vb(snap.ref[0], snap.ref[1])[0]}" cy="${m2vb(snap.ref[0], snap.ref[1])[1]}"
       r="7" fill="none" stroke="#059669" stroke-width="2.5"/>`;
@@ -943,15 +811,10 @@ function pointOnSeg(px, py, s){
          t >= -1e-9 && t <= 1+1e-9;
 }
 
-// Recompute the snap at commit time so chained vertices inherit the best
-// candidate (including any freshly synthesized compound perp \\u00b7 onseg
-// intersection) instead of a stale preview curSnap or the raw cursor grid.
 function chainAt(ev){
   const L = layout();
-  const raw = metersRaw(ev);
-  const tolM = 11 / L.s;
-  curSnap = snapPoint(raw, chain ? chain.last.slice() : null, tolM, null);
-  let base = curSnap.m;
+  let base = meters(ev, false);
+  if (curSnap && curSnap.m) base = curSnap.m;         // the previewed snap is the truth
   if (!chain){ chain = { first: [base[0], base[1]], last: [base[0], base[1]] };
     feedback("chain started — the green ring = existing point, the orange guide = perpendicular to a wall."); return; }
   if (curSnap.kind === "joint" && curSnap.ref &&
@@ -998,18 +861,6 @@ function splitSegmentAt(idx, ev){
   feedback("split segment " + idx + " at [" + mx + ", " + my + "].");
 }
 
-function metersRaw(ev){
-  // exact cursor in metres (no 5 cm grid rounding) — the snapping solver uses
-  // unquantised coordinates so a compound candidate cannot jitter between snaps.
-  const p = pointerView(ev);
-  const L = layout();
-  const mx = draft.envelope.x0 + (p.x - L.ox) / L.s;
-  const my = draft.envelope.y1 - (p.y - L.oy) / L.s;
-  const cx = Math.min(Math.max(mx, draft.envelope.x0), draft.envelope.x1);
-  const cy = Math.min(Math.max(my, draft.envelope.y0), draft.envelope.y1);
-  return [fmt(cx), fmt(cy)];
-}
-
 function meters(ev, snapLoose){
   const p = pointerView(ev);
   const L = layout();
@@ -1025,7 +876,7 @@ function meters(ev, snapLoose){
 svg.addEventListener("pointermove", ev => {
   withFrame(() => {
     if (tool === "draw"){
-      const raw = metersRaw(ev);
+      const raw = meters(ev, false);
       const tolM = 11 / layout().s;   // ~11 px on screen
       lastRawMForSnap = raw;
       lastPrevForSnap = chain ? chain.last.slice() : null;
@@ -1492,31 +1343,6 @@ if (demo){
   document.getElementById("pveJson").value = JSON.stringify(DEMO_PVE, null, 1);
   solveDraft().then(gateDraft);
 }
-</script>
-
-
-
-
-
-<!-- dbg -->
-<script>
-setTimeout(function(){
-  try {
-    draft = {
-      kind:"wallgraph", name:"debug", description:"",
-      envelope:{x0:-1,x1:11,y0:-1,y1:11}, grid:1, helpers:{master:null,lines:[]},
-      segments:[
-        {x0:0,y0:3,x1:5,y1:3},     // horizontal reference wall
-        {x0:1,y0:0,x1:1,y1:5},     // vertical wall crossed by the perpendicular
-      ],
-      bindings:[], faces:[], edges:{}, _faces:[]
-    };
-    var m = [1.0, 3.05], prev = [1, 1];   // moving vertically => perp to horizontal wall
-    var cand = gatherSnapCandidates(m, prev, 11 / layout().s);
-    var d = document.createElement("div"); d.id="dbgout"; document.body.appendChild(d);
-    d.textContent = cand.map(function(c){return c.kind+"@"+c.m.join(",")}).join(" \u00b7 ");
-  } catch(err){ var d=document.createElement("div"); d.id="dbgout"; document.body.appendChild(d); d.textContent="ERR:"+err.message; }
-}, 2000);
 </script>
 </body>
 </html>
