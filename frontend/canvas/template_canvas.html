@@ -1,0 +1,286 @@
+<!doctype html>
+<!--
+  plankit template sketch canvas (dev-only authoring tool).
+  Draw typology zones on the envelope, set demarcation modes, save/load
+  drafts as JSON via the plankit API. Self-contained: no build step.
+  AI-generated file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>plankit — template sketch canvas</title>
+<style>
+  :root { --line:#4b5563; --acc:#f97316; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; display: flex; background: #f5f5f4; }
+  #wrap { display:flex; width:100%; height:100vh; }
+  #canvasPane { flex: 1 1 62%; overflow: auto; padding: 10px; }
+  #panel { flex: 0 0 340px; background: #fff; border-left: 1px solid #e5e7eb; padding: 12px; overflow:auto; }
+  svg { background: #fff; border: 1px solid #d1d5db; cursor: crosshair; user-select: none; touch-action: none; }
+  h1 { font-size: 16px; margin: 6px 0; }
+  h2 { font-size: 12px; margin: 14px 0 4px; color: #374151; text-transform: uppercase; letter-spacing: .04em; }
+  button { font: inherit; padding: 3px 9px; margin: 1px; border: 1px solid #9ca3af; background: #fff; border-radius: 4px; cursor: pointer; }
+  button.active { background: #111827; color: #fff; border-color: #111827; }
+  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+  label { display:block; font-size: 12px; color: #374151; margin-top: 6px; }
+  input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 3px 6px; border: 1px solid #d1d5db; border-radius: 4px; }
+  input[type="checkbox"] { width: auto; }
+  .row { display:flex; gap:6px; } .row > * { flex:1; }
+  #feedback { font-size: 12px; white-space: pre-wrap; background: #111827; color: #d1fae5; min-height: 120px; margin-top: 10px; padding: 8px; border-radius: 4px; }
+  #drafts li { cursor: pointer; padding: 2px 0; } #drafts li:hover { color: var(--acc); }
+  .zone-rect { stroke: var(--line); fill-opacity: .6; cursor: move; }
+  .zone-rect.selected { stroke: var(--acc); stroke-width: 2.5; }
+  .gridline { stroke: #e5e7eb; stroke-width: 1; }
+  .tick { fill: var(--acc); }
+  .zonetext { font-size: 11px; fill: #111827; pointer-events: none; }
+  .hint { font-size: 12px; color: #6b7280; margin: 4px 0; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="canvasPane">
+    <h1>plankit — template sketch canvas</h1>
+    <div>
+      <button class="mode active" data-mode="sel" title="select/move zones (v)">✥ select</button>
+      <button class="mode" data-mode="room" title="draw a room zone (r)">room</button>
+      <button class="mode" data-mode="block" title="draw a rigid block (b)">block</button>
+      <button class="mode" data-mode="access" title="draw the access spine (a)">access</button>
+      <button class="mode" data-mode="core" title="draw a core block (k)">core</button>
+      <button class="mode" data-mode="open" title="draw an open strip inside the selected zone (o)">open strip</button>
+      <button id="btnDel" title="delete the selected zone (del)">🗑 delete</button>
+      <button id="btnDup" title="duplicate the selected zone">⧉ dup</button>
+    </div>
+    <div class="hint" id="drawHint">draw: pick a mode above, then drag a rectangle on the plan. select: click a zone to edit it on the right.</div>
+    <svg id="c" width="100%" viewBox="0 0 1000 660"></svg>
+  </div>
+  <div id="panel">
+    <h2>draft</h2>
+    <label>name <input id="fName" value="open-kern"></label>
+    <label>description <input id="fDescr" value=""></label>
+    <div class="row">
+      <label>envelope x (m) <input id="fEx" type="number" value="40" step="0.5" min="5"></label>
+      <label>envelope y (m) <input id="fEy" type="number" value="26" step="0.5" min="5"></label>
+    </div>
+    <label>grid (m) <input id="fGrid" type="number" value="3.3" step="0.1" min="0.5"></label>
+
+    <h2>selection</h2>
+    <label>key <input id="zKey" disabled></label>
+    <label>mode <select id="zMode" disabled>
+      <option>room</option><option>block</option><option>open</option><option>access</option><option>core</option>
+    </select></label>
+    <label>label <input id="zLabel" disabled placeholder="display name"></label>
+    <label>items (fnmatch, comma) <input id="zItems" disabled placeholder="slaap.*, B*-woon"></label>
+    <div class="row">
+      <label>owner (for open strips) <input id="zOwner" disabled placeholder="living"></label>
+      <label>door every (m) <input id="zDoorEvery" type="number" step="0.1" disabled></label>
+    </div>
+    <button id="btnStrip">+ open strip in selection</button>
+
+    <h2>drafts</h2>
+    <div class="row">
+      <button id="btnSave" class="primary">💾 save</button>
+      <button id="btnRefresh">↻ list</button>
+    </div>
+    <ul id="drafts"></ul>
+
+    <h2>checks</h2>
+    <div class="row">
+      <button id="btnValidate">validate</button>
+      <button id="btnRender">render</button>
+    </div>
+    <div id="preview"></div>
+    <div id="feedback">ready.</div>
+  </div>
+</div>
+<script>
+const API = "";  // same origin
+let draft = { name: "open-kern", description: "", envelope: {x0:0,y0:0,x1:40,y1:26}, grid: 3.3, zones: [] };
+let mode = "sel", drawing = null, selected = null, dragOff = null;
+const svg = document.getElementById("c");
+const fmt = n => (Math.round(n*100)/100);
+
+function scale(){ const ex = draft.envelope.x1 - draft.envelope.x0, ey = draft.envelope.y1 - draft.envelope.y0;
+  return { s: 940/ex, ox: 30, oy: 620 - 30/ (ey/ex) / 1, H: 620 }; }
+function toSVG(x, y){ const sc = scale(); return [sc.ox + (x - draft.envelope.x0)*sc.s, 620 - (y - draft.envelope.y0)*sc.s]; }
+function toMeters(px, py){ const sc = scale();
+  return [ (px - sc.ox)/sc.s + draft.envelope.x0, draft.envelope.y0 + (620 - py)/sc.s ]; }
+function snap(v){ return fmt(Math.round(v*2)/2); }
+
+function draw(){
+  const sc = scale(), ex = draft.envelope.x1 - draft.envelope.x0, ey = draft.envelope.y1 - draft.envelope.y0;
+  const [wx0, wy1] = toSVG(draft.envelope.x0, draft.envelope.y1);
+  const w = ex*sc.s, h = ey*sc.s;
+  let parts = [];
+  for (let i = 0; i <= Math.ceil(ex); i++) parts.push(`<line class="gridline" x1="${wx0+i*sc.s}" y1="${wy1}" x2="${wx0+i*sc.s}" y2="${wy1+h}"/>`);
+  for (let j = 0; j <= Math.ceil(ey); j++) parts.push(`<line class="gridline" x1="${wx0}" y1="${wy1+j*sc.s}" x2="${wx0+w}" y2="${wy1+j*sc.s}"/>`);
+  for (const z of draft.zones){
+    const [zx, zy] = toSVG(z.band.x0, z.band.y1);
+    const zw = (z.band.x1-z.band.x0)*sc.s, zh = (z.band.y1-z.band.y0)*sc.s;
+    const fills = { room:"#9fc6e8", block:"#f6c8a0", open:"#e8e2c8", access:"#cfcfcf", core:"#5f5f5f" };
+    const sel = selected === z ? " selected" : "";
+    parts.push(`<rect class="zone-rect${sel}" data-key="${z.key}" x="${zx}" y="${zy}" width="${zw}" height="${zh}"
+      fill="${fills[z.mode]}" stroke-opacity="1"/>`);
+    if (z.mode === "access"){
+      const every = Number(z.priors.door_every || draft.grid);
+      for (let px = z.band.x0 + every/2; px <= z.band.x1 - every/2 + 1e-9; px += every){
+        const [tx, ty] = toSVG(px, (z.band.y0+z.band.y1)/2);
+        parts.push(`<rect class="tick" x="${tx-3}" y="${ty-3}" width="6" height="6"/>`);
+      }
+    }
+    parts.push(`<text class="zonetext" x="${zx+zw/2}" y="${zy+zh/2}" text-anchor="middle">${z.label||z.key}${z.mode!=="room"?" · "+z.mode:""}</text>`);
+  }
+  parts.push(`<rect x="${wx0}" y="${wy1}" width="${w}" height="${h}" fill="none" stroke="#9a3412" stroke-width="3" pointer-events="none"/>`);
+  svg.innerHTML = parts.join("");
+  svg.querySelectorAll(".zone-rect").forEach(r=>{
+    r.addEventListener("pointerdown", ev => startZoneDrag(ev, r.dataset.key));
+  });
+  fillPanel();
+}
+
+function zByKey(k){ return draft.zones.find(z => z.key === k); }
+function uniqueKey(base){
+  if (!zByKey(base)) return base;
+  let n = 2; while (zByKey(`${base}${n}`)) n++; return `${base}${n}`;
+}
+
+function startZoneDrag(ev, key){
+  ev.stopPropagation();
+  select(key);
+  const z = zByKey(key); if (!z) return;
+  const [mx, my] = toMeters(ev.offsetX, ev.offsetY);
+  dragOff = [mx - z.band.x0, my - z.band.y0];
+  svg.setPointerCapture(ev.pointerId);
+}
+svg.addEventListener("pointerdown", ev => {
+  if (mode !== "sel" && mode !== "open"){
+    const [mx, my] = toMeters(ev.offsetX, ev.offsetY);
+    drawing = { mode, x0: snap(mx), y0: snap(my), x1: mx, y1: my };
+  } else { selected = null; draw(); }
+});
+svg.addEventListener("pointermove", ev => {
+  if (selected && dragOff && mode === "sel"){
+    const z = selected, [mx, my] = toMeters(ev.offsetX, ev.offsetY);
+    const w = z.band.x1 - z.band.x0, h = z.band.y1 - z.band.y0;
+    z.band = { x0: snap(mx - dragOff[0]), y0: snap(my - dragOff[1]), x1: 0, y1: 0 };
+    z.band.x1 = fmt(z.band.x0 + w); z.band.y1 = fmt(z.band.y0 + h);
+    draw(); return;
+  }
+  if (drawing){
+    const [mx, my] = toMeters(ev.offsetX, ev.offsetY);
+    drawing.x1 = mx; drawing.y1 = my;
+    drawGhost(drawing);
+  }
+});
+svg.addEventListener("pointerup", ev => {
+  dragOff = null;
+  if (!drawing) return;
+  const d = drawing; drawing = null;
+  d.x1 = snap(d.x1); d.y1 = snap(d.y1);
+  if (Math.abs(d.x1-d.x0) < 0.25 || Math.abs(d.y1-d.y0) < 0.25) { draw(); return; }
+  let owner = null;
+  if (d.mode === "open"){
+    if (!selected){ feedback("pick the owner zone first, then draw the strip."); return; }
+    owner = selected.key;
+    const p = selected;
+    if (d.x0 < p.band.x0 - 1e-6 || d.x1 > p.band.x1 + 1e-6 || d.y0 < p.band.y0 - 1e-6 || d.y1 > p.band.y1 + 1e-6){
+      feedback("strip must stay inside its owner zone."); draw(); return;
+    }
+  }
+  const base = { room:"zone", block:"block", access:"access", core:"core", open:"strip" }[d.mode] || "zone";
+  const z = { key: uniqueKey(base), mode: d.mode, label: "", items: [],
+    band: { x0: Math.min(d.x0,d.x1), y0: Math.min(d.y0,d.y1), x1: Math.max(d.x0,d.x1), y1: Math.max(d.y0,d.y1) },
+    sub_zone_of: owner, priors: d.mode === "access" ? { door_every: draft.grid } : {} };
+  draft.zones.push(z); select(z.key); draw();
+});
+function drawGhost(d){
+  draw();
+  const [gx, gy] = toSVG(Math.min(d.x0,d.x1), Math.max(d.y0,d.y1));
+  const gw = Math.abs(d.x1-d.x0), gh = Math.abs(d.y1-d.y0);
+  svg.insertAdjacentHTML("beforeend",
+    `<rect x="${gx}" y="${gy}" width="${gw*scale().s}" height="${gh*scale().s}" fill="none" stroke="#111" stroke-dasharray="4 3"/>`);
+}
+
+function select(key){ selected = zByKey(key) || null; fillPanel(); }
+function fillPanel(){
+  document.querySelectorAll("#panel input,#panel select").forEach(i => i.disabled = !selected);
+  if (!selected){ draw(); return; }
+  zKey.value = selected.key; zMode.value = selected.mode; zLabel.value = selected.label || "";
+  zItems.value = (selected.items||[]).join(", "); zOwner.value = selected.sub_zone_of || "";
+  zDoorEvery.value = selected.priors.door_every ?? "";
+  zMode.disabled = selected.mode === "open"; zOwner.disabled = selected.mode !== "open";
+  zDoorEvery.disabled = selected.mode !== "access";
+  draw();
+}
+
+document.querySelectorAll("button.mode").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("button.mode").forEach(x => x.classList.remove("active"));
+  b.classList.add("active"); mode = b.dataset.mode;
+}));
+document.addEventListener("keydown", ev => {
+  if (ev.key === "v") document.querySelector('[data-mode="sel"]').click();
+  if (ev.key === "r") document.querySelector('[data-mode="room"]').click();
+  if (ev.key === "b") document.querySelector('[data-mode="block"]').click();
+  if (ev.key === "a") document.querySelector('[data-mode="access"]').click();
+  if (ev.key === "k") document.querySelector('[data-mode="core"]').click();
+  if (ev.key === "o") document.querySelector('[data-mode="open"]').click();
+  if ((ev.key === "Delete" || ev.key === "Backspace") && selected){ draft.zones = draft.zones.filter(z => z !== selected); select(null); draw(); }
+});
+zKey.addEventListener("input", () => { if (selected) selected.key = uniqueKey(zKey.value); draw(); });
+zMode.addEventListener("change", () => { if (selected){ selected.mode = zMode.value; draw(); } });
+zLabel.addEventListener("input", () => { if (selected) selected.label = zLabel.value; draw(); });
+zItems.addEventListener("input", () => { if (selected) selected.items = zItems.value.split(",").map(s => s.trim()).filter(Boolean); });
+zOwner.addEventListener("input", () => { if (selected) selected.sub_zone_of = zOwner.value || null; });
+zDoorEvery.addEventListener("input", () => { if (selected) selected.priors.door_every = Number(zDoorEvery.value) || null; draw(); });
+document.getElementById("btnStrip").addEventListener("click", () => { if (selected) { mode = "open"; feedback("drag the open strip inside " + selected.key); } });
+document.getElementById("btnDel").addEventListener("click", () => { if (selected){ draft.zones = draft.zones.filter(z => z !== selected); select(null); draw(); } });
+document.getElementById("btnDup").addEventListener("click", () => {
+  if (!selected) return;
+  const c = JSON.parse(JSON.stringify(selected)); c.key = uniqueKey(selected.key + "-copy");
+  draft.zones.push(c); select(c.key); draw();
+});
+
+function readDraft(){
+  draft.name = fName.value.trim(); draft.description = fDescr.value;
+  draft.grid = Number(fGrid.value) || 3.3;
+  draft.envelope = { x0: 0, y0: 0, x1: Number(fEx.value) || 40, y1: Number(fEy.value) || 26 };
+  const c = scale(); svg.setAttribute("viewBox", `0 0 1000 ${c.H}`);
+  for (const z of draft.zones){  // clip zones to a changed envelope
+    z.band = { x0: Math.min(z.band.x0, draft.envelope.x1), x1: Math.max(Math.min(z.band.x1, draft.envelope.x1), z.band.x0),
+               y0: Math.min(z.band.y0, draft.envelope.y1), y1: Math.max(Math.min(z.band.y1, draft.envelope.y1), z.band.y0) };
+  }
+}
+function feedback(msg){ document.getElementById("feedback").textContent = msg; }
+async function refreshList(){
+  const list = (await (await fetch(API + "/templates/drafts")).json());
+  document.getElementById("drafts").innerHTML = (list||[]).map(n => `<li data-n="${n}">${n}</li>`).join("") || "<li><i>(none)</i></li>";
+  document.querySelectorAll("#drafts li").forEach(li => li.addEventListener("click", async () => {
+    const d = await (await fetch(API + "/templates/drafts/" + li.dataset.n)).json();
+    draft = d; fName.value = d.name; fDescr.value = d.description || "";
+    fEx.value = d.envelope.x1; fEy.value = d.envelope.y1; fGrid.value = d.grid;
+    selected = null; readDraft(); draw(); feedback("loaded " + d.name);
+  }));
+}
+document.getElementById("btnSave").addEventListener("click", async () => {
+  readDraft();
+  const r = await (await fetch(API + "/templates/drafts/" + draft.name, {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({draft: draft}) })).json();
+  feedback("saved: " + draft.name + (r.errors && r.errors.length ? "\nvalidation:\n" + r.errors.join("\n") : "\nvalidation: clean"));
+  await refreshList();
+});
+document.getElementById("btnRefresh").addEventListener("click", refreshList);
+document.getElementById("btnValidate").addEventListener("click", async () => {
+  readDraft();
+  const r = await (await fetch(API + "/templates/drafts/" + (draft.name || "draft") + "/validate", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({draft: draft}) })).json();
+  feedback("validation: " + ((r.errors||[]).join("\n") || "clean"));
+});
+document.getElementById("btnRender").addEventListener("click", async () => {
+  readDraft();
+  const svgText = await (await fetch(API + "/templates/drafts/render", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({draft: draft}) })).text();
+  document.getElementById("preview").innerHTML = svgText.replace("<svg ", '<svg style="width:100%" ');
+});
+[fEx, fEy, fGrid].forEach(i => i.addEventListener("input", () => { readDraft(); draw(); }));
+readDraft(); draw(); refreshList();
+</script>
+</body>
+</html>

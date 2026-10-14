@@ -8,9 +8,11 @@ geïmporteerd door `plankit/__init__.py` — fastapi is een optionele `[api]`-ex
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from plankit.generate import generate
@@ -18,6 +20,7 @@ from plankit.planar import PlanarSubdivision
 from plankit.program import RoomProgram
 from plankit.store import VariantStore, make_variant
 from plankit.svg import geometry_view, to_svg
+from plankit.templates import TemplateDraft, TemplateStore
 
 
 class GenerateRequest(BaseModel):
@@ -26,16 +29,28 @@ class GenerateRequest(BaseModel):
     parent_id: str | None = None
 
 
+class DraftRequest(BaseModel):
+    draft: dict
+
+
+class ValidateRequest(DraftRequest):
+    program: dict | None = None
+
+
 class ReviseRequest(BaseModel):
     proposal: dict | None = None
     label: str | None = None
 
 
-def create_app(store: VariantStore | None = None) -> FastAPI:
+def create_app(
+    store: VariantStore | None = None, template_store: TemplateStore | None = None
+) -> FastAPI:
     """Bouw de FastAPI-app; ``store`` is injecteerbaar (default in-memory)."""
     store = store or VariantStore(":memory:")
     app = FastAPI(title="plankit", version="0.1.0")
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    app.add_middleware(
+        CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+    )
 
     def _summary(v):
         return {
@@ -49,7 +64,9 @@ def create_app(store: VariantStore | None = None) -> FastAPI:
     def _detail(v):
         sd = PlanarSubdivision.from_dict(v.state)
         d = _summary(v)
-        d.update({"program": v.program, "report": v.report, "geometry": geometry_view(sd)})
+        d.update(
+            {"program": v.program, "report": v.report, "geometry": geometry_view(sd)}
+        )
         return d
 
     @app.get("/variants")
@@ -68,7 +85,13 @@ def create_app(store: VariantStore | None = None) -> FastAPI:
         program = RoomProgram.from_dict(req.program)
         sd = generate(program)
         v = store.add(
-            make_variant(sd, program, step=len(store.all()), label=req.label, parent_id=req.parent_id)
+            make_variant(
+                sd,
+                program,
+                step=len(store.all()),
+                label=req.label,
+                parent_id=req.parent_id,
+            )
         )
         return _detail(v)
 
@@ -78,10 +101,19 @@ def create_app(store: VariantStore | None = None) -> FastAPI:
         if parent is None:
             raise HTTPException(status_code=404, detail="ouder niet gevonden")
         program = RoomProgram.from_dict(parent.program)
-        sd = generate(program, proposal=req.proposal) if req.proposal else generate(program)
+        sd = (
+            generate(program, proposal=req.proposal)
+            if req.proposal
+            else generate(program)
+        )
         v = store.add(
             make_variant(
-                sd, program, step=len(store.all()), label=req.label, parent_id=vid, proposal=req.proposal
+                sd,
+                program,
+                step=len(store.all()),
+                label=req.label,
+                parent_id=vid,
+                proposal=req.proposal,
             )
         )
         return _detail(v)
@@ -99,7 +131,59 @@ def create_app(store: VariantStore | None = None) -> FastAPI:
         va, vb = store.get(a), store.get(b)
         if va is None or vb is None:
             raise HTTPException(status_code=404, detail="variant niet gevonden")
-        return {"a": {"id": va.id, "report": va.report}, "b": {"id": vb.id, "report": vb.report}}
+        return {
+            "a": {"id": va.id, "report": va.report},
+            "b": {"id": vb.id, "report": vb.report},
+        }
+
+    # ── template canvas (dev feature) ─────────────────────────────
+
+    tstore = template_store or TemplateStore()
+
+    @app.get("/templates/canvas")
+    def template_canvas():
+        """Serve the sketch-canvas authoring page (self-contained HTML)."""
+        page = (
+            Path(__file__).resolve().parents[1]
+            / "frontend"
+            / "canvas"
+            / "template_canvas.html"
+        )
+        return FileResponse(str(page), media_type="text/html")
+
+    @app.get("/templates/drafts")
+    def list_drafts():
+        return tstore.list()
+
+    @app.post("/templates/drafts/render")
+    def preview_draft(req: DraftRequest):
+        """SVG zoning diagram from a raw draft body (canvas in-page preview)."""
+        d = TemplateDraft.from_dict(req.draft)
+        return Response(d.preview_svg(), media_type="image/svg+xml")
+
+    @app.get("/templates/drafts/{name}")
+    def get_draft(name: str):
+        draft = tstore.load(name)
+        return draft.to_dict()
+
+    @app.post("/templates/drafts/{name}")
+    def save_draft(name: str, req: DraftRequest):
+        d = TemplateDraft.from_dict(req.draft)
+        errors = d.validate()
+        tstore.save(name, d)
+        return {"saved": name, "errors": errors}
+
+    @app.post("/templates/drafts/{name}/validate")
+    def validate_draft(name: str, req: ValidateRequest):
+        """Dry-run: draft errors, plus PvE coverage when a program is given."""
+        d = TemplateDraft.from_dict(req.draft)
+        out = {"errors": d.validate()}
+        if req.program is not None:
+            prog = RoomProgram.from_dict(req.program)
+            covered, uncovered = d.coverage(prog)
+            out["covered"] = covered
+            out["uncovered"] = uncovered
+        return out
 
     return app
 
