@@ -634,6 +634,18 @@ function renderSnapFx(snap){
     parts += `<circle cx="${fmt(cx)}" cy="${fmt(cy)}" r="2.6" `
     + `fill="${col}" stroke="#111827" stroke-width="0.6" opacity="0.45" `
     + `pointer-events="none"/>`;
+    // show every perpendicular lock as a dashed line even when it is only a
+    // bystander, otherwise the perpendicular contribution is invisible.
+    if (cc.kind === "perp" && cc.ref && cc.ref[1]){
+      const [sx, sy, nx, ny] = cc.ref[1];
+      const a = 28;
+      parts += `<line x1="${m2vb(sx - nx*a, sy - ny*a)[0]}" ` +
+               `y1="${m2vb(sx - nx*a, sy - ny*a)[1]}" ` +
+               `x2="${m2vb(sx + nx*a, sy + ny*a)[0]}" ` +
+               `y2="${m2vb(sx + nx*a, sy + ny*a)[1]}" ` +
+               `stroke="#f97316" stroke-width="1.3" stroke-dasharray="4 3" `
+               + `opacity="0.75" pointer-events="none"/>`;
+    }
   }
   if (snap && snap.kind === "joint" && snap.ref)
     parts += `<circle cx="${m2vb(snap.ref[0], snap.ref[1])[0]}" cy="${m2vb(snap.ref[0], snap.ref[1])[1]}"
