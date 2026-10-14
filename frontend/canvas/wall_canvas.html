@@ -651,7 +651,7 @@ function renderSnapFx(snap){
     parts += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#f97316"
       stroke-width="1.5" stroke-dasharray="4 3" opacity="0.9"/>`;
   }
-  if (curSnap && curSnap.candCount > 1){
+  if (curSnap && curSnap.candCount > 1 && curSnap.kind !== "compound"){
     const c = curSnap.candCount, i = (curSnap.candIdx || 0) + 1;
     const [tx, ty] = m2vb(curSnap.m[0], curSnap.m[1]);
     parts += `<text x="${tx + 8}" y="${ty - 8}" font-size="10" font-weight="600" fill="#1d4ed8">${i}/${c} ${curSnap.kind || ""} · tab cycles</text>`;
