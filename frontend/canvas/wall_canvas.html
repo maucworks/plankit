@@ -40,6 +40,8 @@
   .seg.facade { stroke: var(--facade); stroke-width: 3; }
   .seg.hot { stroke: #111827; stroke-width: 3.2; }
   .vert { fill: #111827; r: 7; cursor: move; }
+  .vert.edit-handle { fill: #1d4ed8; stroke: #ffffff; stroke-width: 2; }
+  .vert.hover-edit { fill: var(--acc); }
   .vert.hot { fill: var(--acc); r: 9; }
   .vert.hot { fill: var(--acc); r: 6; }
   .face-fill { pointer-events: all; cursor: pointer; }
@@ -317,10 +319,16 @@ function draw(){
     }
   });
   svg._joints = seen;
+  const inEdit = (tool === "edit");
   for (const [k, idxList] of seen){
     const [px, py] = k.split(",").map(Number);
     const [vx, vy] = m2vb(px, py);
-    parts.push(`<circle class="vert" data-pt="${k}" data-segs="${idxList.join(",")}" cx="${fmt(vx)}" cy="${fmt(vy)}"/>`);
+    if (inEdit){
+      const hx = fmt(vx - 5), hy = fmt(vy - 5);
+      parts.push(`<rect class="vert edit-handle" data-pt="${k}" data-segs="${idxList.join(",")}"
+        x="${hx}" y="${hy}" width="10" height="10" rx="1"/>`);
+    } else
+      parts.push(`<circle class="vert" data-pt="${k}" data-segs="${idxList.join(",")}" cx="${fmt(vx)}" cy="${fmt(vy)}"/>`);
   }
   parts.push('<line id="rubber" class="rubber" style="display:none"/>');
   const solved = draft._solved || null;
@@ -685,6 +693,7 @@ function setTool(next){
   tool = next;
   document.querySelectorAll("button.tool").forEach(x => x.classList.toggle("active", x.dataset.tool === next));
   setVB();
+  draw();
 }
 document.querySelectorAll("button.tool").forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
 function typingInField(ev){
