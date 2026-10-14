@@ -284,8 +284,13 @@ def solve_areas(
         else:
             m.Add(X[a] == X[b])
             len0 = int(round(abs(s["y1"] - s["y0"]) * 10))
+        lo = int(round(len0 * 0.25))
+        # a door needs at least a 1.2 m clear opening; wall/open strokes
+        # keep their softer relative window (25% / 300%).
+        if draft.edges.get(i, "wall") == "door":
+            lo = max(lo, 12)
         lv = m.NewIntVar(
-            max(2, int(round(len0 * 0.25))), int(round(len0 * 3.0)), f"len{i}"
+            max(2, lo), int(round(len0 * 3.0)), f"len{i}"
         )
         m.AddAbsEquality(lv, X[a] - X[b] if horiz else Y[a] - Y[b])
 

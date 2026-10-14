@@ -39,7 +39,7 @@ from plankit.templates import Band, TemplateStore
 
 EPS_AREA = 0.05  # m²; sub-sliver faces of the noder are not rooms
 FACE_MATCH_TOL = 2.5  # m; nearest-centroid matching for face tags
-EDGE_KINDS = ("wall", "open", "access", "facade")
+EDGE_KINDS = ("wall", "open", "access", "facade", "door")
 
 
 @dataclass
@@ -126,6 +126,15 @@ class WallGraphDraft:
         for i, kind in self.edges.items():
             if kind not in EDGE_KINDS and i < len(self.segments):
                 errors.append(f"edge:{i}:unknown-kind<{kind}>")
+            if kind == "door" and i < len(self.segments):
+                run = math.hypot(
+                    self.segments[i]["x1"] - self.segments[i]["x0"],
+                    self.segments[i]["y1"] - self.segments[i]["y0"],
+                )
+                if run < 1.2 - 1e-6:
+                    errors.append(
+                        f"edge:{i}:door-too-short<{run:.2f}m<1.20m"
+                    )
         helpers = self.helpers or {}
         master = helpers.get("master")
         if master:

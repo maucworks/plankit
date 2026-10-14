@@ -46,7 +46,7 @@ from plankit.program import RoomProgram
 from plankit.templates import pattern_matches
 from plankit.wallgraph import EPS_AREA, FACE_MATCH_TOL, WallGraphDraft
 
-OPENING_KINDS = ("open", "access")
+OPENING_KINDS = ("open", "access", "door")
 _TOL = 1e-6
 _PT_TOL = 1e-6  # m; a stroke must pass within this of the shared-edge midpoint
 

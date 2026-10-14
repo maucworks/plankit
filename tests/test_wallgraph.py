@@ -347,3 +347,58 @@ def test_grid_conflict_names_the_binding():
     out = solve_areas(WallGraphDraft.from_dict(d), 25.0)
     assert out["status"] == "infeasible"
     assert any("on line 'L1'" in c for c in out["conflicts"])
+
+
+def test_door_edge_requires_at_least_1_2_meters():
+    d = _draft()  # 40-wide divider, long enough
+    draft = WallGraphDraft.from_dict(d)
+    draft.edges = {0: "facade", 1: "facade", 2: "facade", 3: "facade",
+                  4: "door"}
+    assert draft.validate() == []
+    # inject a short hostage stroke tagged door
+    short = WallGraphDraft.from_dict(d)
+    short.segments.append({"x0": 0, "y0": 0, "x1": 0.5, "y1": 0})
+    short.segments.append({"x0": 0.5, "y0": 0, "x1": 10, "y1": 0})
+    short.edges = {0: "facade", 1: "facade", 2: "facade", 3: "facade",
+                  4: "door", 5: "door"}
+    errs = short.validate()
+    assert any("door-too-short" in e for e in errs)
+
+
+def test_door_edge_counts_as_a_passage_for_the_gate():
+    from plankit.program import ProgramSpace, RoomProgram, ProgramEdge
+    from plankit.wallgraph import WallGraphDraft
+    from plankit.wallgate import gate
+
+    draft = WallGraphDraft.from_dict(
+        {
+            "kind": "wallgraph",
+            "name": "door-gate",
+            "envelope": {"x0": 0, "y0": 0, "x1": 40, "y1": 26},
+            "grid": 3.3,
+            "segments": [
+                {"x0": 0, "y0": 0, "x1": 40, "y1": 0},  # facade
+                {"x0": 40, "y0": 0, "x1": 40, "y1": 26},  # facade
+                {"x0": 40, "y0": 26, "x1": 0, "y1": 26},  # facade
+                {"x0": 0, "y0": 26, "x1": 0, "y1": 0},  # facade
+                {"x0": 0, "y0": 10, "x1": 40, "y1": 10},  # door (>= 1.2 m)
+            ],
+            "edges": {"0": "facade", "1": "facade", "2": "facade", "3": "facade",
+                      "4": "door"},
+            "faces": [
+                {"key": "living", "items": ["A1-woon"], "centroid": [20, 18],
+                 "area_min": 700, "area_max": 740},
+                {"key": "wet", "items": ["A1-bad"], "centroid": [20, 5],
+                 "area_min": 305, "area_max": 315},
+            ],
+        }
+    )
+    program = RoomProgram(
+        nodes={"A1-woon": ProgramSpace(area_min=700, area_max=740),
+               "A1-bad": ProgramSpace(area_min=305, area_max=315),
+               "buiten": ProgramSpace(exterior=True)},
+        edges=[ProgramEdge(a="A1-woon", b="A1-bad", kind="door")],
+    )
+    out = gate(draft, program)
+    # a "door" edge is a passage, so the program door is realised
+    assert out["doors"]["drawn"] == 1 and out["doors"]["failed"] == 0

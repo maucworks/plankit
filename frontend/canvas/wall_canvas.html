@@ -49,6 +49,8 @@
   .helper-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 8 5; opacity: 0.65; pointer-events: none; }
   .helper-line.master-helper { stroke: #2563eb; stroke-width: 2; opacity: 0.85; }
   .snap-line { stroke: #93c5fd; stroke-width: 2.5; pointer-events: none; }
+  .door-mark { pointer-events: none; }
+  .door-label { pointer-events: none; font-weight: 600; }
   .hint { font-size: 12px; color: #6b7280; margin: 4px 0; min-height: 16px; }
 </style>
 </head>
@@ -189,6 +191,7 @@ function setVB(){
   svg.setAttribute("viewBox", `0 0 ${VB.w} ${VB.h}`);
   svg.setAttribute("class", "mode-" + tool);
 }
+function edgeKind(i){ const v = draft.edges[i]; return v == null ? (draft.edges[String(i)] == null ? "wall" : draft.edges[String(i)]) : v; }
 function draw(){
   setVB();
   const L = layout();
@@ -232,8 +235,17 @@ function draw(){
   // segments + edge kind styles
   draft.segments.forEach((s, i) => {
     const [x1, y1] = m2vb(s.x0, s.y0), [x2, y2] = m2vb(s.x1, s.y1);
-    const kind = draft.edges[i] || "wall";
+    const kind = edgeKind(i);
     parts.push(`<line class="seg ${kind}" data-idx="${i}" data-kind="${kind}" x1="${fmt(x1)}" y1="${fmt(y1)}" x2="${fmt(x2)}" y2="${fmt(y2)}"/>`);
+  });
+  // door markers: a dot at the (unsolved) midpoint of every "door" edge
+  draft.segments.forEach((s, i) => {
+    const kind = edgeKind(i);
+    if (kind !== "door") return;
+    const mx = (s.x0 + s.x1) / 2, my = (s.y0 + s.y1) / 2;
+    const [x1, y1] = m2vb(mx, my);
+    parts.push(`<circle class="door-mark" cx="${fmt(x1)}" cy="${fmt(y1)}" r="5" fill="#2563eb"/>
+      <text class="door-label" x="${fmt(x1 + 5)}" y="${fmt(y1 - 2)}" font-size="10" fill="#2563eb">door</text>`);
   });
   // joints: distinct segment endpoints (for the vertex tool)
   const seen = new Map();
@@ -295,7 +307,21 @@ function bindLayer(){
   svg.querySelectorAll(".seg").forEach(l => {
     l.addEventListener("click", ev => {
       if (tool === "etag"){
-        draft.edges[l.dataset.idx] = document.getElementById("edgeKind").value;
+        const kind = document.getElementById("edgeKind").value;
+        draft.edges[l.dataset.idx] = kind;
+        if (kind === "door"){
+            const i = Number(l.dataset.idx);
+            const s = draft.segments[i];
+            const run = Math.hypot(s.x1 - s.x0, s.y1 - s.y0);
+            if (run < 1.2 - 1e-9){
+                feedback("edge " + i + " is only " + fmt(run) +
+                    " m long – a door needs at least 1.20 m. Pick a longer wall or use access.");
+                draft.edges[l.dataset.idx] = "wall";
+            } else {
+                l.dataset.kind = "door";
+                feedback("edge " + i + " classified as door at " + fmt(run) + " m (min " + fmt(run) + ").");
+            }
+        }
         draw(); noding();
       } else if (tool === "erase"){
         draft.edges = Object.fromEntries(Object.entries(draft.edges)
