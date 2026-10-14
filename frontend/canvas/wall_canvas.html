@@ -23,7 +23,10 @@
   #panel { flex: 0 0 340px; background: #fff; border-left: 1px solid #e5e7eb; padding: 12px; overflow-y: auto; }
   svg { background: #fff; border: 1px solid #d1d5db; display: block; width: 100%;
         max-height: calc(100vh - 140px); touch-action: none; }
-  svg.mode-draw, svg.mode-split, svg.mode-vertex, svg.mode-etag, svg.mode-face, svg.mode-erase { cursor: crosshair; }
+  svg.mode-draw, svg.mode-vertex, svg.mode-etag, svg.mode-face, svg.mode-erase { cursor: crosshair; }
+  svg.mode-edit { cursor: pointer; }
+  button.emode { font: inherit; padding: 2px 8px; border: 1px solid #cbd5e1; background: #fff; border-radius: 4px; cursor: pointer; }
+  button.emode.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
   svg.mode-sel  { cursor: default; }
   h1 { font-size: 16px; margin: 4px 0 8px; }
   h2 { font-size: 12px; margin: 14px 0 4px; color: #374151; text-transform: uppercase; letter-spacing: .04em; }
@@ -71,7 +74,6 @@
     <div>
       <b style="margin-left:2px">draw</b>
       <button class="tool active" data-tool="draw"  title="polyline chain: click = vertex, double-click = end">✏ draw</button>
-      <button class="tool" data-tool="split"  title="click a line: point on the line splits it">✂ split</button>
       <button class="tool" data-tool="vertex" title="drag a drawn endpoint">⛓ vertex</button>
       <button class="tool" data-tool="etag"   title="click a segment: apply the edge kind below">EDGE</button>
       <span style="display:inline-block;margin:0 6px">
@@ -89,6 +91,11 @@
       <span style="border-left:1px solid #cbd5e1;margin:0 6px;height:18px;display:inline-block"></span>
       <b>edit</b>
       <button class="tool" data-tool="edit"    title="select and edit joints, edges, faces">✎ edit</button>
+      <span id="editModes" style="display:none;font:inherit;margin-right:6px">
+        <button class="emode" data-emode="vertex" title="vertex select (1)">1 vertex</button>
+        <button class="emode" data-emode="edge"   title="edge select (2)">2 edge</button>
+        <button class="emode" data-emode="face"   title="face select (3)">3 face</button>
+      </span>
       <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
       <button id="btnDims" class="tool" title="toggle dimension lines (segments + face extents)">📏 dims</button>
     </div>
@@ -383,7 +390,7 @@ function bindLayer(){
   svg.querySelectorAll(".zone-rect").forEach(() => {});
   svg.querySelectorAll(".vert").forEach(c => {
     c.addEventListener("pointerdown", ev => {
-      if (tool !== "vertex" && tool !== "edit") return;
+      if (tool !== "vertex" && !(tool === "edit" && editMode === "vertex")) return;
       ev.stopPropagation();
       const pt = c.dataset.pt.split(",").map(Number);
       vertexDrag = { orig: [pt[0], pt[1]], work: [pt[0], pt[1]], segIdxList: c.dataset.segs.split(",").map(Number), armSeg: -1 };
@@ -456,8 +463,6 @@ function bindLayer(){
           .filter(([k]) => Number(k) !== Number(l.dataset.idx)));
         draft.segments.splice(Number(l.dataset.idx), 1);
         draw(); noding();
-      } else if (tool === "split"){
-        splitSegmentAt(Number(l.dataset.idx), ev);
       }
     });
   });
@@ -711,9 +716,19 @@ function renderSnapFx(snap){
 function setTool(next){
   tool = next;
   document.querySelectorAll("button.tool").forEach(x => x.classList.toggle("active", x.dataset.tool === next));
+  const em = document.getElementById("editModes");
+  if (em) em.style.display = (next === "edit") ? "inline-block" : "none";
   setVB();
   draw();
 }
+let editMode = "vertex";   // explicit-blender-style edit sub-mode
+function setEditMode(next){
+  editMode = next;
+  document.querySelectorAll("button.emode").forEach(b => b.classList.toggle("active", b.dataset.emode === next));
+  draw();
+  feedback("edit mode: " + next + (next === "vertex" ? " — drag the square handles." : next === "edge" ? " — click an edge, then reclassify/delete or push it." : " — click inside a face to tag it."));
+}
+document.querySelectorAll("button.emode").forEach(b => b.addEventListener("click", () => setEditMode(b.dataset.emode)));
 document.querySelectorAll("button.tool").forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
 function typingInField(ev){
   const t = ev.target;
@@ -723,11 +738,15 @@ document.addEventListener("keydown", ev => {
   if (typingInField(ev)) return;
   if (ev.key === "Escape" && chain){ endChain(); }
   if (ev.key === "d") setTool("draw");
-  if (ev.key === "s") setTool("split");
   if (ev.key === "v") setTool("vertex");
   if (ev.key === "e") setTool("etag");
   if (ev.key === "f") setTool("face");
   if (ev.key === "x") setTool("erase");
+  if (tool === "edit"){
+    if (ev.key === "1") setEditMode("vertex");
+    if (ev.key === "2") setEditMode("edge");
+    if (ev.key === "3") setEditMode("face");
+  }
 });
 
 
@@ -959,27 +978,6 @@ function chainAt(ev){
 }
 
 // ── split: point on the line splits it ────────────────────────────────
-function splitSegmentAt(idx, ev){
-  const s = draft.segments[idx];
-  const p = meters(ev, true);
-  const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
-  const t = Math.max(0.05, Math.min(0.95, ((p[0]-s.x0)*dx + (p[1]-s.y0)*dy) / (dx*dx + dy*dy || 1e-12)));
-  const mx = fmt(s.x0 + t*dx), my = fmt(s.y0 + t*dy);
-  const kind = draft.edges[idx];
-  const second = { x0: mx, y0: my, x1: s.x1, y1: s.y1 };
-  s.x1 = mx; s.y1 = my;
-  draft.segments.splice(idx + 1, 0, second);
-  const ne = {};
-  Object.keys(draft.edges).forEach(k => {
-    const kn = Number(k);
-    ne[kn > idx ? kn + 1 : kn] = draft.edges[k];
-  });
-  if (kind){ ne[idx] = kind; ne[idx + 1] = kind; }
-  draft.edges = ne;
-  draw(); noding();
-  feedback("split segment " + idx + " at [" + mx + ", " + my + "].");
-}
-
 function metersRaw(ev){
   const p = pointerView(ev);
   const L = layout();
@@ -1132,9 +1130,17 @@ svg.addEventListener("click", ev => {
       const pr = projectOnSeg(pt, seg);
       if (pr && pr.dist < ed){ selEdge = idx; ed = pr.dist; }
     });
+    // ── explicit edit sub-mode: selection type is WHAT YOU SUB-MODE-PICKED,
+    // not inferred from what happens to be under the cursor (Blender-style 1/2/3)
+    if (editMode === "edge"){
+      selJoint = null; selFace = null;      // edge mode sees only edges
+    } else if (editMode === "face"){
+      selJoint = null; selEdge = null;      // face mode sees only faces
+    } else {
+      selEdge = null; selFace = null;       // vertex mode sees only vertices
+    }
     let selFace = currentFaces().find(f =>
       pointInPoly(pt, f.verts));
-    // precedence: joint > edge > face (mirrors snap)
     if (selJoint){
       selection = { type: "joint", pt: selJoint.slice(), segs: [...(svg._joints ? svg._joints.get(selJoint.join(",")) ? [] : [] : [])] };
       // find joints key
@@ -1205,7 +1211,7 @@ svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(
 
 // ── tolerant edit-mode vertex drag (root handler, survives narrow dots) ─
 svg.addEventListener("pointerdown", ev => {
-  if (tool !== "edit" || ev.button !== 0) return;
+  if (tool !== "edit" || editMode !== "vertex" || ev.button !== 0) return;
   const pt = metersRaw(ev);
   const tol = Math.max(0.3, 14 / layout().s);
   let joint = null, best_d = tol;
