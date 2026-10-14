@@ -874,10 +874,15 @@ function pointOnSeg(px, py, s){
          t >= -1e-9 && t <= 1+1e-9;
 }
 
+// Recompute the snap at commit time so chained vertices inherit the best
+// candidate (including any freshly synthesized compound perp \\u00b7 onseg
+// intersection) instead of a stale preview curSnap or the raw cursor grid.
 function chainAt(ev){
   const L = layout();
-  let base = meters(ev, false);
-  if (curSnap && curSnap.m) base = curSnap.m;         // the previewed snap is the truth
+  const raw = meters(ev, false);
+  const tolM = 11 / L.s;
+  curSnap = snapPoint(raw, chain ? chain.last.slice() : null, tolM, null);
+  let base = curSnap.m;
   if (!chain){ chain = { first: [base[0], base[1]], last: [base[0], base[1]] };
     feedback("chain started — the green ring = existing point, the orange guide = perpendicular to a wall."); return; }
   if (curSnap.kind === "joint" && curSnap.ref &&
