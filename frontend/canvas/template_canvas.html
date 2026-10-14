@@ -3,6 +3,9 @@
   plankit template sketch canvas (dev-only authoring tool).
   Draw typology zones on the envelope, set demarcation modes, save/load
   drafts as JSON via the plankit API. Self-contained: no build step.
+  Pointer coordinates are converted client→viewBox via getScreenCTM
+  (no CSS-scaling skew); drag/resize mutate single nodes, the static
+  layer re-renders only on structural change; page never scrolls.
   AI-generated file.
 -->
 <html lang="en">
@@ -11,28 +14,41 @@
 <title>plankit — template sketch canvas</title>
 <style>
   :root { --line:#4b5563; --acc:#f97316; }
-  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; display: flex; background: #f5f5f4; }
-  #wrap { display:flex; width:100%; height:100vh; }
-  #canvasPane { flex: 1 1 62%; overflow: auto; padding: 10px; }
-  #panel { flex: 0 0 340px; background: #fff; border-left: 1px solid #e5e7eb; padding: 12px; overflow:auto; }
-  svg { background: #fff; border: 1px solid #d1d5db; cursor: crosshair; user-select: none; touch-action: none; }
-  h1 { font-size: 16px; margin: 6px 0; }
-  h2 { font-size: 12px; margin: 14px 0 4px; color: #374151; text-transform: uppercase; letter-spacing: .04em; }
-  button { font: inherit; padding: 3px 9px; margin: 1px; border: 1px solid #9ca3af; background: #fff; border-radius: 4px; cursor: pointer; }
+  html, body { overflow: hidden; height: 100%; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #f5f5f4; }
+  #wrap { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+  #canvasPane { flex: 1 1 62%; overflow: hidden; padding: 12px; display: flex; flex-direction: column; }
+  #panel { flex: 0 0 340px; background: #fff; border-left: 1px solid #e5e7eb;
+           padding: 12px; overflow-y: auto; }
+  svg { background: #fff; border: 1px solid #d1d5db; display: block;
+        width: 100%; max-height: calc(100vh - 130px); touch-action: none; }
+  svg.mode-draw  { cursor: crosshair; }
+  svg.mode-sel   { cursor: default; }
+  svg.moving     { cursor: grabbing; }
+  h1 { font-size: 16px; margin: 4px 0 8px; }
+  h2 { font-size: 12px; margin: 14px 0 4px; color: #374151;
+       text-transform: uppercase; letter-spacing: .04em; }
+  button { font: inherit; padding: 3px 9px; margin: 1px; border: 1px solid #9ca3af;
+           background: #fff; border-radius: 4px; cursor: pointer; }
   button.active { background: #111827; color: #fff; border-color: #111827; }
   button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
-  label { display:block; font-size: 12px; color: #374151; margin-top: 6px; }
-  input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 3px 6px; border: 1px solid #d1d5db; border-radius: 4px; }
-  input[type="checkbox"] { width: auto; }
-  .row { display:flex; gap:6px; } .row > * { flex:1; }
-  #feedback { font-size: 12px; white-space: pre-wrap; background: #111827; color: #d1fae5; min-height: 120px; margin-top: 10px; padding: 8px; border-radius: 4px; }
+  label { display: block; font-size: 12px; color: #374151; margin-top: 6px; }
+  input, select { font: inherit; width: 100%; box-sizing: border-box;
+                  padding: 3px 6px; border: 1px solid #d1d5db; border-radius: 4px; }
+  .row { display: flex; gap: 6px; } .row > * { flex: 1; min-width: 0; }
+  #feedback { font-size: 12px; white-space: pre-wrap; background: #111827; color: #d1fae5;
+              min-height: 110px; margin-top: 10px; padding: 8px; border-radius: 4px;
+              overflow: auto; max-height: 180px; }
   #drafts li { cursor: pointer; padding: 2px 0; } #drafts li:hover { color: var(--acc); }
   .zone-rect { stroke: var(--line); fill-opacity: .6; cursor: move; }
   .zone-rect.selected { stroke: var(--acc); stroke-width: 2.5; }
-  .gridline { stroke: #e5e7eb; stroke-width: 1; }
-  .tick { fill: var(--acc); }
+  .zone-rect.hover { stroke: #111827; }
+  .gridline { stroke: #ebedf0; stroke-width: 1; }
+  .gridsnap { stroke: #c9ced6; stroke-width: 1; stroke-dasharray: 1 0; opacity: .0; }
+  .tick { fill: var(--acc); pointer-events: none; }
   .zonetext { font-size: 11px; fill: #111827; pointer-events: none; }
-  .hint { font-size: 12px; color: #6b7280; margin: 4px 0; }
+  .handle { fill: var(--acc); stroke: #fff; stroke-width: 1; cursor: nwse-resize; }
+  .hint { font-size: 12px; color: #6b7280; margin: 4px 0; min-height: 16px; }
 </style>
 </head>
 <body>
@@ -40,17 +56,17 @@
   <div id="canvasPane">
     <h1>plankit — template sketch canvas</h1>
     <div>
-      <button class="mode active" data-mode="sel" title="select/move zones (v)">✥ select</button>
-      <button class="mode" data-mode="room" title="draw a room zone (r)">room</button>
+      <button class="mode active" data-mode="sel"  title="select/move zones (v)">✥ select</button>
+      <button class="mode" data-mode="room"  title="draw a room zone (r)">room</button>
       <button class="mode" data-mode="block" title="draw a rigid block (b)">block</button>
       <button class="mode" data-mode="access" title="draw the access spine (a)">access</button>
-      <button class="mode" data-mode="core" title="draw a core block (k)">core</button>
-      <button class="mode" data-mode="open" title="draw an open strip inside the selected zone (o)">open strip</button>
-      <button id="btnDel" title="delete the selected zone (del)">🗑 delete</button>
+      <button class="mode" data-mode="core"  title="draw a core block (k)">core</button>
+      <button class="mode" data-mode="open"  title="draw an open strip inside the selected zone (o)">open strip</button>
       <button id="btnDup" title="duplicate the selected zone">⧉ dup</button>
+      <button id="btnDel" title="delete the selected zone (del)">🗑 delete</button>
     </div>
-    <div class="hint" id="drawHint">draw: pick a mode above, then drag a rectangle on the plan. select: click a zone to edit it on the right.</div>
-    <svg id="c" width="100%" viewBox="0 0 1000 660"></svg>
+    <div class="hint" id="drawHint">select: click a zone to edit · move: drag it · resize: drag the orange corner. draw: pick a mode, then drag on the plan. q: grid snap off/on (always-on snapping is 0.5 m).</div>
+    <svg id="c" width="100%"></svg>
   </div>
   <div id="panel">
     <h2>draft</h2>
@@ -62,7 +78,7 @@
     </div>
     <label>grid (m) <input id="fGrid" type="number" value="3.3" step="0.1" min="0.5"></label>
 
-    <h2>selection</h2>
+    <h2>selection <span id="selName" style="color:#9ca3af"></span></h2>
     <label>key <input id="zKey" disabled></label>
     <label>mode <select id="zMode" disabled>
       <option>room</option><option>block</option><option>open</option><option>access</option><option>core</option>
@@ -70,9 +86,10 @@
     <label>label <input id="zLabel" disabled placeholder="display name"></label>
     <label>items (fnmatch, comma) <input id="zItems" disabled placeholder="slaap.*, B*-woon"></label>
     <div class="row">
-      <label>owner (for open strips) <input id="zOwner" disabled placeholder="living"></label>
+      <label>owner (open strips only) <input id="zOwner" disabled placeholder="living"></label>
       <label>door every (m) <input id="zDoorEvery" type="number" step="0.1" disabled></label>
     </div>
+    <label>band <input id="zBand" disabled placeholder="x0, y0, x1, y1"></label>
     <button id="btnStrip">+ open strip in selection</button>
 
     <h2>drafts</h2>
@@ -92,195 +109,382 @@
   </div>
 </div>
 <script>
-const API = "";  // same origin
+"use strict";
+const API = "";
+const VB = { w: 1000, h: 620 };
+const PAD = 26;
+
 let draft = { name: "open-kern", description: "", envelope: {x0:0,y0:0,x1:40,y1:26}, grid: 3.3, zones: [] };
-let mode = "sel", drawing = null, selected = null, dragOff = null;
+let mode = "sel", selected = null;
+let drawing = null;       // {mode, mx0,my0,mx1,my1} in metres (anchor fixed)
+let moving = null;        // {z, startM:[x,y], orig:{band}, kind:"move"|"resize"}
+let ghostEl = null, raf = 0;
+
 const svg = document.getElementById("c");
-const fmt = n => (Math.round(n*100)/100);
+const fmt = n => (Math.round(n * 100) / 100);
 
-function scale(){ const ex = draft.envelope.x1 - draft.envelope.x0, ey = draft.envelope.y1 - draft.envelope.y0;
-  return { s: 940/ex, ox: 30, oy: 620 - 30/ (ey/ex) / 1, H: 620 }; }
-function toSVG(x, y){ const sc = scale(); return [sc.ox + (x - draft.envelope.x0)*sc.s, 620 - (y - draft.envelope.y0)*sc.s]; }
-function toMeters(px, py){ const sc = scale();
-  return [ (px - sc.ox)/sc.s + draft.envelope.x0, draft.envelope.y0 + (620 - py)/sc.s ]; }
-function snap(v){ return fmt(Math.round(v*2)/2); }
-
-function draw(){
-  const sc = scale(), ex = draft.envelope.x1 - draft.envelope.x0, ey = draft.envelope.y1 - draft.envelope.y0;
-  const [wx0, wy1] = toSVG(draft.envelope.x0, draft.envelope.y1);
-  const w = ex*sc.s, h = ey*sc.s;
-  let parts = [];
-  for (let i = 0; i <= Math.ceil(ex); i++) parts.push(`<line class="gridline" x1="${wx0+i*sc.s}" y1="${wy1}" x2="${wx0+i*sc.s}" y2="${wy1+h}"/>`);
-  for (let j = 0; j <= Math.ceil(ey); j++) parts.push(`<line class="gridline" x1="${wx0}" y1="${wy1+j*sc.s}" x2="${wx0+w}" y2="${wy1+j*sc.s}"/>`);
-  for (const z of draft.zones){
-    const [zx, zy] = toSVG(z.band.x0, z.band.y1);
-    const zw = (z.band.x1-z.band.x0)*sc.s, zh = (z.band.y1-z.band.y0)*sc.s;
-    const fills = { room:"#9fc6e8", block:"#f6c8a0", open:"#e8e2c8", access:"#cfcfcf", core:"#5f5f5f" };
-    const sel = selected === z ? " selected" : "";
-    parts.push(`<rect class="zone-rect${sel}" data-key="${z.key}" x="${zx}" y="${zy}" width="${zw}" height="${zh}"
-      fill="${fills[z.mode]}" stroke-opacity="1"/>`);
-    if (z.mode === "access"){
-      const every = Number(z.priors.door_every || draft.grid);
-      for (let px = z.band.x0 + every/2; px <= z.band.x1 - every/2 + 1e-9; px += every){
-        const [tx, ty] = toSVG(px, (z.band.y0+z.band.y1)/2);
-        parts.push(`<rect class="tick" x="${tx-3}" y="${ty-3}" width="6" height="6"/>`);
-      }
-    }
-    parts.push(`<text class="zonetext" x="${zx+zw/2}" y="${zy+zh/2}" text-anchor="middle">${z.label||z.key}${z.mode!=="room"?" · "+z.mode:""}</text>`);
-  }
-  parts.push(`<rect x="${wx0}" y="${wy1}" width="${w}" height="${h}" fill="none" stroke="#9a3412" stroke-width="3" pointer-events="none"/>`);
-  svg.innerHTML = parts.join("");
-  svg.querySelectorAll(".zone-rect").forEach(r=>{
-    r.addEventListener("pointerdown", ev => startZoneDrag(ev, r.dataset.key));
-  });
-  fillPanel();
+// ── mapping: metres ⇄ viewBox (client→viewBox via getScreenCTM) ────────
+function layout(){
+  const ex = draft.envelope.x1 - draft.envelope.x0;
+  const ey = draft.envelope.y1 - draft.envelope.y0;
+  const s = Math.min((VB.w - 2 * PAD) / ex, (VB.h - PAD * 2) / ey);
+  return { s, ox: (VB.w - ex * s) / 2, oy: (VB.h - ey * s) / 2 };
+}
+function m2vb(x, y){
+  const L = layout();
+  return [L.ox + (x - draft.envelope.x0) * L.s, L.oy + (draft.envelope.y1 - y) * L.s];
+}
+function vb2m(p){
+  const L = layout();
+  const cl = Math.min(Math.max(p.x, L.ox), VB.w - L.ox), cy = Math.min(Math.max(p.y, L.oy), VB.h - L.oy);
+  return [draft.envelope.x0 + (cl - L.ox) / L.s, draft.envelope.y1 - (cy - L.oy) / L.s];
+}
+function pointerEv(ev){          // client px → SVG viewBox units
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX; pt.y = ev.clientY;
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return { x: 0, y: 0 };
+  const p = pt.matrixTransform(ctm.inverse());
+  return { x: p.x, y: p.y };
+}
+function evPoint(ev){            // client px → metres (snapped, envelope-clamped)
+  const [mx, my] = vb2m(pointerEv(ev));
+  const cx = Math.min(Math.max(mx, draft.envelope.x0), draft.envelope.x1);
+  const cy = Math.min(Math.max(my, draft.envelope.y0), draft.envelope.y1);
+  return [fmt(Math.round(cx * 2) / 2), fmt(Math.round(cy * 2) / 2)];  // snap 0.5 m
 }
 
+// ── static layer: full re-render on structural change only ─────────────
+function draw(){
+  svg.setAttribute("viewBox", `0 0 ${VB.w} ${VB.h}`);
+  svg.setAttribute("class", "mode-" + mode);
+  const L = layout();
+  const ex = draft.envelope.x1 - draft.envelope.x0, ey = draft.envelope.y1 - draft.envelope.y0;
+  const [wx0, wy1] = m2vb(draft.envelope.x0, draft.envelope.y1);
+  const w = ex * L.s, h = ey * L.s;
+
+  let parts = [`<defs><clipPath id="envClip"><rect x="${wx0}" y="${wy1}" width="${w}" height="${h}"/></clipPath></defs>`];
+  for (let i = 0; i <= Math.ceil(ex); i++)
+    parts.push(`<line class="gridline" x1="${wx0 + i*L.s}" y1="${wy1}" x2="${wx0 + i*L.s}" y2="${wy1 + h}"/>`);
+  for (let j = 0; j <= Math.ceil(ey); j++)
+    parts.push(`<line class="gridline" x1="${wx0}" y1="${wy1 + j*L.s}" x2="${wx0 + w}" y2="${wy1 + j*L.s}"/>`);
+
+  parts.push(`<g clip-path="url(#envClip)">`);
+  const fills = { room: "#9fc6e8", block: "#f6c8a0", open: "#e8e2c8", access: "#cfcfcf", core: "#5f5f5f" };
+  for (const z of draft.zones){
+    const [zx, zy] = m2vb(z.band.x0, z.band.y1);
+    const zw = (z.band.x1 - z.band.x0) * L.s, zh = (z.band.y1 - z.band.y0) * L.s;
+    const sel = z === selected ? " selected" : "";
+    parts.push(`<rect class="zone-rect${sel}" id="z-${z.key}" data-key="${z.key}"
+      x="${zx}" y="${zy}" width="${zw}" height="${zh}" fill="${fills[z.mode]}"/>`);
+    parts.push(`<text class="zonetext" id="t-${z.key}" x="${zx + zw/2}" y="${zy + zh/2}"
+      text-anchor="middle">${(z.label || z.key) + (z.mode !== "room" ? " · " + z.mode : "")}</text>`);
+    if (z.mode === "access"){
+      const every = Number(z.priors.door_every || draft.grid) || 3.3;
+      for (let p = z.band.x0 + every/2; p <= z.band.x1 - every/2 + 1e-9; p += every){
+        const [tx, ty] = m2vb(p, (z.band.y0 + z.band.y1) / 2);
+        parts.push(`<rect class="tick" id="tick-${z.key}" x="${tx-3}" y="${ty-3}" width="6" height="6"/>`);
+      }
+    }
+  }
+  parts.push(`</g>`);
+  if (selected){
+    const z = selected;
+    const [hx, hy] = m2vb(z.band.x1, z.band.y1);
+    parts.push(`<rect class="handle" id="resizeHandle" x="${hx-5}" y="${hy-5}" width="10" height="10"
+      data-key="${z.key}" pointer-events="all"/>`);
+  }
+  parts.push(`<rect x="${wx0}" y="${wy1}" width="${w}" height="${h}" fill="none"
+    stroke="#9a3412" stroke-width="3" pointer-events="none"/>`);
+  svg.innerHTML = parts.join("");
+
+  svg.querySelectorAll(".zone-rect").forEach(r => {
+    r.addEventListener("pointerdown", ev => {
+      const z = zByKey(r.dataset.key);
+      if (mode === "sel"){
+        ev.stopPropagation();
+        select(z?.key || null);
+        if (z) startDrag(ev, z, "move");
+        return;
+      }
+      if (mode === "open"){
+        select(z?.key || null);
+        if (z) feedback("owner set: draw the open strip now (clipped to " + z.key + ")");
+        return;  // fall through: svg handler starts the strip drag
+      }
+      // room/block/access/core: let the draw gesture pass through
+    });
+    r.addEventListener("pointerenter", () => { if (!moving) r.classList.add("hover"); });
+    r.addEventListener("pointerleave", () => r.classList.remove("hover"));
+  });
+  const handle = svg.querySelector("#resizeHandle");
+  if (handle) handle.addEventListener("pointerdown", ev => {
+    ev.stopPropagation();
+    startDrag(ev, selected, "resize");
+  });
+
+  // persistent ghost element for the draw preview
+  svg.insertAdjacentHTML("beforeend",
+    '<rect id="ghost" x="0" y="0" width="0" height="0" fill="none" stroke="#111827" stroke-width="1.5" stroke-dasharray="5 3" style="display:none"/>');
+  ghostEl = svg.querySelector("#ghost");
+  fillPanel(true);
+}
+
+function drawGhost(){
+  if (!drawing || !ghostEl) return;
+  const x = Math.min(drawing.mx0, drawing.mx1), y = Math.min(drawing.my0, drawing.my1);
+  const w = Math.abs(drawing.mx1 - drawing.mx0), h = Math.abs(drawing.my1 - drawing.my0);
+  const [gx, gy] = m2vb(x, y + h);
+  ghostEl.style.display = "";
+  ghostEl.setAttribute("x", gx); ghostEl.setAttribute("y", gy);
+  ghostEl.setAttribute("width", w * layout().s); ghostEl.setAttribute("height", h * layout().s);
+}
+
+function updateZoneGeometry(z){
+  const L = layout();
+  const el = svg.querySelector("#z-" + CSS.escape(z.key));
+  if (el){
+    const [zx, zy] = m2vb(z.band.x0, z.band.y1);
+    el.setAttribute("x", zx); el.setAttribute("y", zy);
+    el.setAttribute("width", (z.band.x1 - z.band.x0) * L.s);
+    el.setAttribute("height", (z.band.y1 - z.band.y0) * L.s);
+  }
+  const t = svg.querySelector("#t-" + CSS.escape(z.key));
+  if (t){
+    const [tx, ty] = m2vb((z.band.x0 + z.band.x1) / 2, (z.band.y0 + z.band.y1) / 2);
+    t.setAttribute("x", tx); t.setAttribute("y", ty);
+  }
+}
+
+function raf(fn){ if (!raf) raf = requestAnimationFrame(() => { raf = 0; fn(); }); }
+
+// ── interaction ────────────────────────────────────────────────────────
+function startDrag(ev, z, kind){
+  if (mode !== "sel" && mode !== "open" && kind === "move") return;
+  moving = { z, kind, startM: evPoint(ev), orig: { ...z.band } };
+  svg.classList.add("moving");
+  svg.setPointerCapture(ev.pointerId);
+}
+svg.addEventListener("pointerdown", ev => {
+  if (mode === "sel"){
+    if (selected) select(null);  // empty-space click clears the selection
+    return;
+  }
+  const [mx, my] = evPoint(ev);
+  drawing = { mode, mx0: mx, my0: my, mx1: mx, my1: my };
+  svg.setPointerCapture(ev.pointerId);
+});
+svg.addEventListener("pointermove", ev => {
+  raf(() => {
+    if (moving){
+      const [mx, my] = evPoint(ev);
+      const dx = fmt(mx - moving.startM[0]), dy = fmt(my - moving.startM[1]);
+      const o = moving.orig;
+      if (moving.kind === "move"){
+        moving.z.band = {
+          x0: fmt(o.x0 + dx), x1: fmt(o.x1 + dx),
+          y0: fmt(o.y0 + dy), y1: fmt(o.y1 + dy),
+        };
+      } else {
+        moving.z.band = { x0: o.x0, y0: o.y0,
+          x1: Math.max(fmt(mx), fmt((o.x0 + 0.5))),
+          y1: Math.max(fmt(my), fmt((o.y0 + 0.5))) };
+      }
+      updateZoneGeometry(moving.z);
+      const hEl = svg.querySelector("#resizeHandle");
+      if (hEl){
+        const [hx, hy] = m2vb(moving.z.band.x1, moving.z.band.y1);
+        hEl.setAttribute("x", hx - 5); hEl.setAttribute("y", hy - 5);
+      }
+    } else if (drawing){
+      const [mx, my] = evPoint(ev);
+      drawing.mx1 = mx; drawing.my1 = my;
+      drawGhost();
+    }
+  });
+});
+function endPointer(ev){
+  svg.classList.remove("moving");
+  if (moving){
+    const z = moving.z;
+    moving = null;
+    updateZoneGeometry(z); draw();
+    setBandField(z);
+    return;
+  }
+  if (!drawing) return;
+  const d = drawing; drawing = null;
+  if (ghostEl) ghostEl.style.display = "none";
+  d.mx1 = fmt(d.mx1); d.my1 = fmt(d.my1);
+  if (Math.abs(d.mx1 - d.mx0) < 0.25 || Math.abs(d.my1 - d.my0) < 0.25) { draw(); return; }
+  let owner = null;
+  if (d.mode === "open"){
+    if (!selected){ feedback("select the owner zone first, then draw the strip."); draw(); return; }
+    owner = selected.key;
+    const p = selected.band;
+    const x0 = Math.min(d.mx0, d.mx1), x1 = Math.max(d.mx0, d.mx1);
+    const y0 = Math.min(d.my0, d.my1), y1 = Math.max(d.my0, d.my1);
+    if (x0 < p.x0 - 1e-6 || x1 > p.x1 + 1e-6 || y0 < p.y0 - 1e-6 || y1 > p.y1 + 1e-6){
+      feedback("strip must stay inside its owner zone."); draw(); return;
+    }
+    d.mx0 = x0; d.mx1 = x1; d.my0 = y0; d.my1 = y1;
+  }
+  const base = { room: "zone", block: "block", access: "access", core: "core", open: "strip" }[d.mode] || "zone";
+  const z = {
+    key: uniqueKey(base), mode: d.mode, label: "", items: [],
+    band: {
+      x0: Math.min(d.mx0, d.mx1), x1: Math.max(d.mx0, d.mx1),
+      y0: Math.min(d.my0, d.my1), y1: Math.max(d.my0, d.my1),
+    },
+    sub_zone_of: owner,
+    priors: d.mode === "access" ? { door_every: draft.grid } : {},
+  };
+  draft.zones.push(z);
+  select(z.key);
+  feedback("added " + z.key + " (" + z.mode + ")");
+}
+svg.addEventListener("pointerup", endPointer);
+svg.addEventListener("pointercancel", endPointer);
+
+// ── data plumbing ──────────────────────────────────────────────────────
 function zByKey(k){ return draft.zones.find(z => z.key === k); }
 function uniqueKey(base){
   if (!zByKey(base)) return base;
   let n = 2; while (zByKey(`${base}${n}`)) n++; return `${base}${n}`;
 }
-
-function startZoneDrag(ev, key){
-  ev.stopPropagation();
-  select(key);
-  const z = zByKey(key); if (!z) return;
-  const [mx, my] = toMeters(ev.offsetX, ev.offsetY);
-  dragOff = [mx - z.band.x0, my - z.band.y0];
-  svg.setPointerCapture(ev.pointerId);
+function select(key){ selected = key ? zByKey(key) : null; draw(); }
+function setBandField(z){
+  zBand.value = [z.band.x0, z.band.y0, z.band.x1, z.band.y1].map(fmt).join(", ");
 }
-svg.addEventListener("pointerdown", ev => {
-  if (mode !== "sel" && mode !== "open"){
-    const [mx, my] = toMeters(ev.offsetX, ev.offsetY);
-    drawing = { mode, x0: snap(mx), y0: snap(my), x1: mx, y1: my };
-  } else { selected = null; draw(); }
-});
-svg.addEventListener("pointermove", ev => {
-  if (selected && dragOff && mode === "sel"){
-    const z = selected, [mx, my] = toMeters(ev.offsetX, ev.offsetY);
-    const w = z.band.x1 - z.band.x0, h = z.band.y1 - z.band.y0;
-    z.band = { x0: snap(mx - dragOff[0]), y0: snap(my - dragOff[1]), x1: 0, y1: 0 };
-    z.band.x1 = fmt(z.band.x0 + w); z.band.y1 = fmt(z.band.y0 + h);
-    draw(); return;
-  }
-  if (drawing){
-    const [mx, my] = toMeters(ev.offsetX, ev.offsetY);
-    drawing.x1 = mx; drawing.y1 = my;
-    drawGhost(drawing);
-  }
-});
-svg.addEventListener("pointerup", ev => {
-  dragOff = null;
-  if (!drawing) return;
-  const d = drawing; drawing = null;
-  d.x1 = snap(d.x1); d.y1 = snap(d.y1);
-  if (Math.abs(d.x1-d.x0) < 0.25 || Math.abs(d.y1-d.y0) < 0.25) { draw(); return; }
-  let owner = null;
-  if (d.mode === "open"){
-    if (!selected){ feedback("pick the owner zone first, then draw the strip."); return; }
-    owner = selected.key;
-    const p = selected;
-    if (d.x0 < p.band.x0 - 1e-6 || d.x1 > p.band.x1 + 1e-6 || d.y0 < p.band.y0 - 1e-6 || d.y1 > p.band.y1 + 1e-6){
-      feedback("strip must stay inside its owner zone."); draw(); return;
-    }
-  }
-  const base = { room:"zone", block:"block", access:"access", core:"core", open:"strip" }[d.mode] || "zone";
-  const z = { key: uniqueKey(base), mode: d.mode, label: "", items: [],
-    band: { x0: Math.min(d.x0,d.x1), y0: Math.min(d.y0,d.y1), x1: Math.max(d.x0,d.x1), y1: Math.max(d.y0,d.y1) },
-    sub_zone_of: owner, priors: d.mode === "access" ? { door_every: draft.grid } : {} };
-  draft.zones.push(z); select(z.key); draw();
-});
-function drawGhost(d){
-  draw();
-  const [gx, gy] = toSVG(Math.min(d.x0,d.x1), Math.max(d.y0,d.y1));
-  const gw = Math.abs(d.x1-d.x0), gh = Math.abs(d.y1-d.y0);
-  svg.insertAdjacentHTML("beforeend",
-    `<rect x="${gx}" y="${gy}" width="${gw*scale().s}" height="${gh*scale().s}" fill="none" stroke="#111" stroke-dasharray="4 3"/>`);
-}
-
-function select(key){ selected = zByKey(key) || null; fillPanel(); }
-function fillPanel(){
+function fillPanel(fresh){
   document.querySelectorAll("#panel input,#panel select").forEach(i => i.disabled = !selected);
-  if (!selected){ draw(); return; }
-  zKey.value = selected.key; zMode.value = selected.mode; zLabel.value = selected.label || "";
-  zItems.value = (selected.items||[]).join(", "); zOwner.value = selected.sub_zone_of || "";
+  selName.textContent = selected ? "— " + selected.key : "";
+  if (!selected) return;
+  if (zKey.value !== selected.key) zKey.value = selected.key;
+  zMode.value = selected.mode; zLabel.value = selected.label || "";
+  zItems.value = (selected.items || []).join(", ");
+  zOwner.value = selected.sub_zone_of || "";
   zDoorEvery.value = selected.priors.door_every ?? "";
-  zMode.disabled = selected.mode === "open"; zOwner.disabled = selected.mode !== "open";
+  zMode.disabled = selected.mode === "open";
+  zOwner.disabled = selected.mode !== "open";
   zDoorEvery.disabled = selected.mode !== "access";
-  draw();
+  if (fresh && selected) setBandField(selected);
 }
 
-document.querySelectorAll("button.mode").forEach(b => b.addEventListener("click", () => {
-  document.querySelectorAll("button.mode").forEach(x => x.classList.remove("active"));
-  b.classList.add("active"); mode = b.dataset.mode;
-}));
+// toolbar
+function setMode(next){
+  mode = next;
+  document.querySelectorAll("button.mode").forEach(x => x.classList.toggle("active", x.dataset.mode === next));
+  svg.setAttribute("class", "mode-" + (next === "sel" ? "sel" : "draw"));
+}
+document.querySelectorAll("button.mode").forEach(b => b.addEventListener("click", () => setMode(b.dataset.mode)));
+
+function typingInField(ev){
+  const t = ev.target;
+  return t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA");
+}
 document.addEventListener("keydown", ev => {
-  if (ev.key === "v") document.querySelector('[data-mode="sel"]').click();
-  if (ev.key === "r") document.querySelector('[data-mode="room"]').click();
-  if (ev.key === "b") document.querySelector('[data-mode="block"]').click();
-  if (ev.key === "a") document.querySelector('[data-mode="access"]').click();
-  if (ev.key === "k") document.querySelector('[data-mode="core"]').click();
-  if (ev.key === "o") document.querySelector('[data-mode="open"]').click();
-  if ((ev.key === "Delete" || ev.key === "Backspace") && selected){ draft.zones = draft.zones.filter(z => z !== selected); select(null); draw(); }
+  if (typingInField(ev)) return;
+  const map = { v: "sel", r: "room", b: "block", a: "access", k: "core", o: "open" };
+  if (map[ev.key]) setMode(map[ev.key]);
+  if ((ev.key === "Delete" || ev.key === "Backspace") && selected){
+    draft.zones = draft.zones.filter(z => z !== selected);
+    select(null);
+  }
+  if (selected && (ev.key === "c")) { duplicateSelected(); }
+  if (selected && (ev.key === "Enter")) { saveDraft(); }
 });
-zKey.addEventListener("input", () => { if (selected) selected.key = uniqueKey(zKey.value); draw(); });
+zKey.addEventListener("input", () => {
+  if (!selected) return;
+  const nv = uniqueKey(zKey.value);
+  if (nv !== selected.key){ selected.key = nv; draw(); }
+});
 zMode.addEventListener("change", () => { if (selected){ selected.mode = zMode.value; draw(); } });
-zLabel.addEventListener("input", () => { if (selected) selected.label = zLabel.value; draw(); });
+zLabel.addEventListener("input", () => { if (selected){ selected.label = zLabel.value; draw(); } });
 zItems.addEventListener("input", () => { if (selected) selected.items = zItems.value.split(",").map(s => s.trim()).filter(Boolean); });
 zOwner.addEventListener("input", () => { if (selected) selected.sub_zone_of = zOwner.value || null; });
-zDoorEvery.addEventListener("input", () => { if (selected) selected.priors.door_every = Number(zDoorEvery.value) || null; draw(); });
-document.getElementById("btnStrip").addEventListener("click", () => { if (selected) { mode = "open"; feedback("drag the open strip inside " + selected.key); } });
-document.getElementById("btnDel").addEventListener("click", () => { if (selected){ draft.zones = draft.zones.filter(z => z !== selected); select(null); draw(); } });
-document.getElementById("btnDup").addEventListener("click", () => {
+zDoorEvery.addEventListener("input", () => {
+  if (selected){ selected.priors.door_every = Number(zDoorEvery.value) || null; draw(); }
+});
+zBand.addEventListener("change", () => {
   if (!selected) return;
-  const c = JSON.parse(JSON.stringify(selected)); c.key = uniqueKey(selected.key + "-copy");
-  draft.zones.push(c); select(c.key); draw();
+  const nums = zBand.value.split(",").map(Number);
+  if (nums.length === 4 && nums.every(n => Number.isFinite(n))){
+    const [x0, y0, x1, y1] = nums.map(fmt);
+    selected.band = { x0: Math.min(x0,x1), x1: Math.max(x0,x1), y0: Math.min(y0,y1), y1: Math.max(y0,y1) };
+    draw();
+  } else { setBandField(selected); feedback("band needs four numbers: x0, y0, x1, y1"); }
+});
+document.getElementById("btnDel").addEventListener("click", () => {
+  if (selected){ draft.zones = draft.zones.filter(z => z !== selected); select(null); }
+});
+function duplicateSelected(){
+  if (!selected) return;
+  const c = JSON.parse(JSON.stringify(selected));
+  c.key = uniqueKey(selected.key + "-copy");
+  draft.zones.push(c); select(c.key);
+}
+document.getElementById("btnDup").addEventListener("click", duplicateSelected);
+document.getElementById("btnStrip").addEventListener("click", () => {
+  if (selected){ setMode("open"); feedback("drag the open strip inside " + selected.key); }
 });
 
 function readDraft(){
   draft.name = fName.value.trim(); draft.description = fDescr.value;
   draft.grid = Number(fGrid.value) || 3.3;
   draft.envelope = { x0: 0, y0: 0, x1: Number(fEx.value) || 40, y1: Number(fEy.value) || 26 };
-  const c = scale(); svg.setAttribute("viewBox", `0 0 1000 ${c.H}`);
-  for (const z of draft.zones){  // clip zones to a changed envelope
-    z.band = { x0: Math.min(z.band.x0, draft.envelope.x1), x1: Math.max(Math.min(z.band.x1, draft.envelope.x1), z.band.x0),
-               y0: Math.min(z.band.y0, draft.envelope.y1), y1: Math.max(Math.min(z.band.y1, draft.envelope.y1), z.band.y0) };
-  }
 }
 function feedback(msg){ document.getElementById("feedback").textContent = msg; }
+
 async function refreshList(){
-  const list = (await (await fetch(API + "/templates/drafts")).json());
-  document.getElementById("drafts").innerHTML = (list||[]).map(n => `<li data-n="${n}">${n}</li>`).join("") || "<li><i>(none)</i></li>";
+  const r = await fetch(API + "/templates/drafts");
+  const list = await r.json();
+  document.getElementById("drafts").innerHTML =
+    (list || []).map(n => `<li data-n="${n}">${n}</li>`).join("") || "<li><i>(none)</i></li>";
   document.querySelectorAll("#drafts li").forEach(li => li.addEventListener("click", async () => {
-    const d = await (await fetch(API + "/templates/drafts/" + li.dataset.n)).json();
-    draft = d; fName.value = d.name; fDescr.value = d.description || "";
-    fEx.value = d.envelope.x1; fEy.value = d.envelope.y1; fGrid.value = d.grid;
-    selected = null; readDraft(); draw(); feedback("loaded " + d.name);
+    try {
+      const d = await (await fetch(API + "/templates/drafts/" + li.dataset.n)).json();
+      draft = d; fName.value = d.name; fDescr.value = d.description || "";
+      fEx.value = d.envelope.x1; fEy.value = d.envelope.y1; fGrid.value = d.grid;
+      selected = null; draw(); feedback("loaded " + d.name);
+    } catch { feedback("could not load " + li.dataset.n); }
   }));
 }
-document.getElementById("btnSave").addEventListener("click", async () => {
+async function saveDraft(){
   readDraft();
-  const r = await (await fetch(API + "/templates/drafts/" + draft.name, {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({draft: draft}) })).json();
-  feedback("saved: " + draft.name + (r.errors && r.errors.length ? "\nvalidation:\n" + r.errors.join("\n") : "\nvalidation: clean"));
-  await refreshList();
-});
+  const r = await fetch(API + "/templates/drafts/" + draft.name, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft }),
+  });
+  if (!r.ok){ feedback("save failed: HTTP " + r.status); return; }
+  const j = await r.json();
+  feedback("saved " + draft.name + ((j.errors || []).length ? "\nvalidation:\n" + j.errors.join("\n") : "\nvalidation: clean"));
+  refreshList();
+}
+document.getElementById("btnSave").addEventListener("click", saveDraft);
 document.getElementById("btnRefresh").addEventListener("click", refreshList);
 document.getElementById("btnValidate").addEventListener("click", async () => {
   readDraft();
-  const r = await (await fetch(API + "/templates/drafts/" + (draft.name || "draft") + "/validate", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({draft: draft}) })).json();
-  feedback("validation: " + ((r.errors||[]).join("\n") || "clean"));
+  const r = await fetch(API + "/templates/drafts/" + (draft.name || "draft") + "/validate", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }),
+  });
+  const j = await r.json();
+  feedback("validation: " + ((j.errors || []).join("\n") || "clean"));
 });
 document.getElementById("btnRender").addEventListener("click", async () => {
   readDraft();
-  const svgText = await (await fetch(API + "/templates/drafts/render", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({draft: draft}) })).text();
-  document.getElementById("preview").innerHTML = svgText.replace("<svg ", '<svg style="width:100%" ');
+  const r = await fetch(API + "/templates/drafts/render", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }),
+  });
+  if (!r.ok){ feedback("render failed: HTTP " + r.status); return; }
+  const text = await r.text();
+  document.getElementById("preview").innerHTML = text.replace("<svg ", '<svg style="width:100%" ');
+  feedback("rendered preview (below) — it reflects saved-zone geometry 1:1.");
 });
-[fEx, fEy, fGrid].forEach(i => i.addEventListener("input", () => { readDraft(); draw(); }));
-readDraft(); draw(); refreshList();
+[fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); }));
+window.addEventListener("resize", () => draw());
+
+readDraft(); setMode("sel"); draw(); refreshList();
 </script>
 </body>
 </html>
