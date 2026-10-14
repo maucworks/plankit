@@ -514,21 +514,33 @@ function gatherSnapCandidates(m, prev, tolM){
             kind: "grid", ref: hl, dist: dv, tier: 2 });
   }
   if (prev){
-    // 3. perpendicular lock — one candidate per wall that is (near-)orthogonal
+    // 3. perpendicular lock — one candidate per wall that is (near-)orthogonal.
+    // The snap point is the PROJECTION of the cursor onto the perpendicular
+    // line through prev (not a constant-radius point), so it stays pinned to
+    // the perpendicular line as the cursor moves. Hysteresis: engage at
+    // nDot < 0.05, release at nDot > 0.12, to stop flicker.
     const vx = m[0] - prev[0], vy = m[1] - prev[1], vlen = Math.hypot(vx, vy);
     if (vlen > 0.1){
+      let perpAdded = false;
       for (const s of draft.segments){
         const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
         if (len < 1e-9) continue;
         const nDot = Math.abs((vx*(dx/len) + vy*(dy/len)) / vlen);
-        if (nDot < 0.07){
+        const engaged = perpHyst.wall === s;
+        const threshold = engaged ? 0.12 : 0.05;
+        if (nDot < threshold){
           let px = dy/len, py = -dx/len;
           if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
-          const locked = [fmt(prev[0] + vlen*px), fmt(prev[1] + vlen*py)];
+          // project cursor onto the perpendicular line through prev
+          const along = vx*px + vy*py;
+          const locked = [fmt(prev[0] + along*px), fmt(prev[1] + along*py)];
           add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
                dist: Math.hypot(locked[0]-m[0], locked[1]-m[1]), tier: 3 });
+          perpAdded = true;
+          perpHyst = { wall: s };
         }
       }
+      if (!perpAdded) perpHyst = { wall: null };
     }
     // 4. ortho (axis-locked from prev)
     if (Math.abs(m[1] - prev[1]) <= tolM)
@@ -598,6 +610,7 @@ let snapCandidates = [], snapActiveIdx = 0, lastRawMForSnap = null,
 // exact point until the author moves > COMPOUND_ESCAPE_PX px away or tabs out
 const COMPOUND_ESCAPE_PX = 28;
 let compoundLock = null;   // { pt:[x,y], px:number }
+let perpHyst = { wall: null };  // perp hysteresis: engaged wall
 function renderSnapFx(snap){
   let parts = "";
   if (snap && snap.kind === "compound"){
