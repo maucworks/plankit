@@ -530,8 +530,13 @@ function gatherSnapCandidates(m, prev, tolM){
           let px = dy/len, py = -dx/len;
           if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
           const locked = [fmt(prev[0] + vlen*px), fmt(prev[1] + vlen*py)];
-          add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
-               dist: Math.hypot(locked[0]-m[0], locked[1]-m[1]), tier: -1, axis: "both" });
+          const cdist = Math.hypot(locked[0]-m[0], locked[1]-m[1]);
+          // a perp candidate only participates if it is actually within the
+          // ordinary snap tolerance; a far perpendicular ray should never
+          // overpower the joint / on-wall / compound candidates and cause
+          // the cursor to jump out of the current snap zone.
+          if (cdist <= tolM) add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
+               dist: cdist, tier: -1, axis: "both" });
         }
       }
     }
