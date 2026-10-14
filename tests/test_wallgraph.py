@@ -233,3 +233,117 @@ def test_nested_room_gives_L_shaped_remainder():
     assert len(faces) == 2
     assert any(len(f["verts"]) == 6 for f in faces)  # the L remainder
     assert abs(sum(f["area"] for f in faces) - 30 * 20) < 0.01
+
+
+# ── helpers + bindings model ───────────────────────────────────────────
+
+
+def test_helpers_and_bindings_roundtrip():
+    d = _draft()
+    d["helpers"] = {
+        "master": {"axis": "horizontal", "pos": 0.0, "module": 3.3},
+        "lines": [{"id": "L1", "axis": "horizontal", "offset": 9.5}],
+    }
+    d["bindings"] = [{"line": "L1", "junction": {"x": 0.0, "y": 10.0}}]
+    draft = WallGraphDraft.from_dict(d)
+    assert draft.to_dict()["helpers"] == d["helpers"]
+    assert draft.to_dict()["bindings"] == d["bindings"]
+
+
+def test_binding_on_unknown_line_flags():
+    d = _draft()
+    d["helpers"] = {
+        "master": {"axis": "horizontal", "pos": 0.0, "module": 3.3},
+        "lines": [],
+    }
+    d["bindings"] = [{"line": "LX", "junction": {"x": 3.0, "y": 3.0}}]
+    errs = WallGraphDraft.from_dict(d).validate()
+    assert any("unknown-line" in e for e in errs)
+
+
+def test_grid_bound_divider_solves_on_the_line():
+    """The divider is bound to a helper line at master + 9.5 m: the solve
+    must place it there exactly, giving wet = 380 m2."""
+    from plankit.wallsolve import solve_areas
+
+    d = _draft()
+    d["segments"] = [
+        {"x0": 0, "y0": 0, "x1": 40, "y1": 0},
+        {"x0": 40, "y0": 0, "x1": 40, "y1": 26},
+        {"x0": 40, "y0": 26, "x1": 0, "y1": 26},
+        {"x0": 0, "y0": 26, "x1": 0, "y1": 0},
+        {"x0": 0, "y0": 10, "x1": 40, "y1": 10},
+    ]
+    d["edges"] = {"0": "facade", "1": "facade", "2": "facade", "3": "facade"}
+    d["faces"] = [
+        {
+            "key": "living",
+            "label": "living",
+            "items": ["*-woon"],
+            "area_min": 660,
+            "area_max": 662,
+            "centroid": [20, 18],
+        },
+        {
+            "key": "wet",
+            "label": "wet",
+            "items": ["*-bad"],
+            "area_min": 378,
+            "area_max": 380,
+            "centroid": [20, 5],
+        },
+    ]
+    d["helpers"] = {
+        "master": {"axis": "horizontal", "pos": 0.0, "module": 3.3},
+        "lines": [{"id": "L1", "axis": "horizontal", "offset": 9.5}],
+    }
+    d["bindings"] = [
+        {"line": "L1", "junction": {"x": 0.0, "y": 10.0}},
+        {"line": "L1", "junction": {"x": 40.0, "y": 10.0}},
+    ]
+    out = solve_areas(WallGraphDraft.from_dict(d), 25.0)
+    assert out["status"] == "solved"
+    areas = {f["key"]: f["area"] for f in out["faces"]}
+    assert areas["living"] == 660.0 and areas["wet"] == 380.0
+
+
+def test_grid_conflict_names_the_binding():
+    from plankit.wallsolve import solve_areas
+
+    d = _draft()
+    d["segments"] = [
+        {"x0": 0, "y0": 0, "x1": 40, "y1": 0},
+        {"x0": 40, "y0": 0, "x1": 40, "y1": 26},
+        {"x0": 40, "y0": 26, "x1": 0, "y1": 26},
+        {"x0": 0, "y0": 26, "x1": 0, "y1": 0},
+        {"x0": 0, "y0": 10, "x1": 40, "y1": 10},
+    ]
+    d["faces"] = [
+        {
+            "key": "living",
+            "label": "living",
+            "items": ["*-woon"],
+            "area_min": 704,
+            "area_max": 706,
+            "centroid": [20, 18],
+        },
+        {
+            "key": "wet",
+            "label": "wet",
+            "items": ["*-bad"],
+            "area_min": 326,
+            "area_max": 328,
+            "centroid": [20, 5],
+        },
+    ]
+    d["helpers"] = {
+        "master": {"axis": "horizontal", "pos": 0.0, "module": 3.3},
+        "lines": [{"id": "L1", "axis": "horizontal", "offset": 9.5}],
+    }
+    d["bindings"] = [
+        {"line": "L1", "junction": {"x": 0.0, "y": 10.0}},
+        {"line": "L1", "junction": {"x": 40.0, "y": 10.0}},
+    ]
+    out = solve_areas(WallGraphDraft.from_dict(d), 25.0)
+    assert out["status"] == "infeasible"
+    assert any("on line 'L1'" in c for c in out["conflicts"])

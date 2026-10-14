@@ -46,6 +46,9 @@
   .joint { pointer-events: none; }
   .rubber { stroke: #111827; stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
   .envelope { fill: none; stroke: #cbced6; stroke-width: 3; pointer-events: none; }
+  .helper-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 8 5; opacity: 0.65; pointer-events: none; }
+  .helper-line.master-helper { stroke: #2563eb; stroke-width: 2; opacity: 0.85; }
+  .snap-line { stroke: #93c5fd; stroke-width: 2.5; pointer-events: none; }
   .hint { font-size: 12px; color: #6b7280; margin: 4px 0; min-height: 16px; }
 </style>
 </head>
@@ -68,6 +71,7 @@
       </span>
       <button class="tool" data-tool="face"   title="click a region: designate it as a room">▦ face</button>
       <button class="tool" data-tool="erase"  title="click a segment to erase it">🧽 erase</button>
+      <button class="tool" data-tool="grid"   title="helpers: place master grid line, then derived lines (g)">⊞ grid</button>
       <button class="tool" data-tool="sel"    title="idle">✥ idle</button>
       <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
     </div>
@@ -99,6 +103,20 @@
       <button id="btnClearTag">Clear tag</button>
     </div>
     <div id="regionInfo" style="font-size:12px;color:#374151;margin-top:8px">click a region with the ▦ tool.</div>
+
+    <h2>grid</h2>
+    <div class="row">
+      <label>master axis
+        <select id="gAxis">
+          <option value="vertical">vertical</option>
+          <option value="horizontal">horizontal</option>
+        </select>
+      </label>
+    </div>
+    <ul id="helperList"></ul>
+    <div class="row">
+      <button id="btnDelMaster">✕ remove master</button>
+    </div>
 
     <h2>drafts</h2>
     <div class="row">
@@ -182,6 +200,24 @@ function draw(){
       stroke="#ffffff" stroke-width="8"/>`);
     const [tx, ty] = m2vb(f.centroid[0], f.centroid[1]);
     parts.push(`<text class="facelabel" x="${tx}" y="${ty}" text-anchor="middle">${(f.label ? f.label + " · " : "")}${fmt(f.area)} m2</text>`);
+  }
+  // helper grid lines (construction geometry: constructed rather than wall)
+  for (const hl of helperLines()){
+    if (hl.master){
+      const [a0, b0] = m2vb(hl.axis === "vertical" ? hl.pos : draft.envelope.x0,
+                            hl.axis === "vertical" ? draft.envelope.y0 : hl.pos);
+      const [a1, b1] = m2vb(hl.axis === "vertical" ? hl.pos : draft.envelope.x1,
+                            hl.axis === "vertical" ? draft.envelope.y1 : hl.pos);
+      parts.push(`<line class="helper-line master-helper" x1="${a0}" y1="${b0}" x2="${a1}" y2="${b1}"/>
+        <text class="facelabel" x="${a0 + 6}" y="${b0 + (hl.axis === "horizontal" ? -6 : 14)}" fill="#2563eb">master</text>`);
+    } else {
+      const [c0x, c0y] = hl.axis === "vertical"
+        ? m2vb(hl.pos, draft.envelope.y0) : m2vb(draft.envelope.x0, hl.pos);
+      const [c1x, c1y] = hl.axis === "vertical"
+        ? m2vb(hl.pos, draft.envelope.y1) : m2vb(draft.envelope.x1, hl.pos);
+      parts.push(`<line class="helper-line" x1="${c0x}" y1="${c0y}" x2="${c1x}" y2="${c1y}"/>
+        <text class="facelabel" x="${c0x + 6}" y="${c0y + (hl.axis === "horizontal" ? -6 : 12)}" fill="#3b82f6">${hl.id} · ${fmt(hl.pos)} m</text>`);
+    }
   }
   // segments + edge kind styles
   draft.segments.forEach((s, i) => {
@@ -331,6 +367,16 @@ function snapPoint(m, prev, tolM){
     if (pr && pr.dist < tolM && (!bestSeg || pr.dist < bestSeg.dist)) bestSeg = { s, pr };
   }
   if (bestSeg) return { m: bestSeg.pr.pt.slice(), kind: "onseg", ref: bestSeg.s };
+  // 2b. grid lines: the cursor rides a helper line (bind on commit)
+  for (let hl of helperLines()){
+    const dAxis = Math.abs(m[0] - hl.pos);
+    const dAxis2 = Math.abs(m[1] - hl.pos);
+    const dv = hl.axis === "vertical" ? dAxis : dAxis2;
+    if (dv < tolM){
+      const snapped = hl.axis === "vertical" ? [hl.pos, m[1]] : [m[0], hl.pos];
+      return { m: snapped, kind: "grid", ref: hl };
+    }
+  }
   if (!prev) return { m, kind: "free" };
   // 3. perpendicular lock (angular): if the segment about to be drawn is
   //    within ~4 degrees of perpendicular to ANY drawn wall, snap the
@@ -385,6 +431,14 @@ function renderSnapFx(snap){
       x2="${m2vb(s.x1, s.y1)[0]}" y2="${m2vb(s.x1, s.y1)[1]}" stroke="#059669"
       stroke-width="4" opacity="0.35"/>`;
   }
+  if (snap && snap.kind === "grid" && snap.ref){
+    const hl = snap.ref;
+    const [a0, b0] = hl.axis === "vertical"
+      ? m2vb(hl.pos, draft.envelope.y0) : m2vb(draft.envelope.x0, hl.pos);
+    const [a1, b1] = hl.axis === "vertical"
+      ? m2vb(hl.pos, draft.envelope.y1) : m2vb(draft.envelope.x1, hl.pos);
+    parts += `<line class="snap-line" x1="${a0}" y1="${b0}" x2="${a1}" y2="${b1}"/>`;
+  }
   if (snap && snap.kind === "perp" && snap.ref){
     const [sx, sy, nx, ny] = snap.ref[1];
     const a = 60;
@@ -423,6 +477,60 @@ document.addEventListener("keydown", ev => {
   if (ev.key === "x") setTool("erase");
 });
 
+
+// ── helper grid registry ────────────────────────────────────────────────
+function helperLines(){
+  const h = draft.helpers || {};
+  const master = h.master;
+  const out = [];
+  if (master && master.axis)
+    out.push({ id: "M", axis: master.axis, pos: Number(master.pos), master: true });
+  for (const ln of h.lines || [])
+    out.push({ id: ln.id, axis: ln.axis, pos: Number(master.pos) + Number(ln.offset), master: false });
+  return out;
+}
+function bindJunction(pt, lineId){
+  const key = Math.round(pt[0] * 10) + "," + Math.round(pt[1] * 10);
+  draft.bindings = (draft.bindings || []).filter(b =>
+    Math.round(b.junction.x * 10) !== Math.round(pt[0] * 10) ||
+    Math.round(b.junction.y * 10) !== Math.round(pt[1] * 10));
+  draft.bindings.push({ line: lineId, junction: { x: fmt(pt[0]), y: fmt(pt[1]) } });
+  void key;
+}
+function unbindJunctionNear(pt){
+  draft.bindings = (draft.bindings || []).filter(b =>
+    Math.hypot(b.junction.x - pt[0], b.junction.y - pt[1]) > 0.25);
+}
+function refreshHelperList(){
+  const ul = document.getElementById("helperList");
+  const h = draft.helpers || {};
+  const rows = [];
+  if (h.master)
+    rows.push(`<li data-del="master" style="cursor:pointer">master · ${h.master.axis} @ ${fmt(h.master.pos)} m · module ${fmt(h.master.module)}</li>`);
+  for (const ln of h.lines || [])
+    rows.push(`<li data-del="${ln.id}" style="cursor:pointer">${ln.id} · ${ln.axis} · offset ${fmt(ln.offset)} m</li>`);
+  for (const b of draft.bindings || [])
+    rows.push(`<li data-unbind="${b.junction.x},${b.junction.y}|${b.line}" style="cursor:pointer">
+      ⟶ ${b.line} binds junction (${fmt(b.junction.x)}, ${fmt(b.junction.y)})</li>`);
+  ul.innerHTML = rows.join("") || "<li><i>(no helpers)</i></li>";
+  ul.querySelectorAll("li[data-del]").forEach(li => li.addEventListener("click", () => {
+    if (li.dataset.del === "master"){
+      draft.helpers = { master: null, lines: [] };
+      draft.bindings = [];
+    } else {
+      draft.helpers.lines = (draft.helpers.lines || []).filter(l => l.id !== li.dataset.del);
+      draft.bindings = (draft.bindings || []).filter(b => b.line !== li.dataset.del);
+    }
+    draw(); refreshHelperList(); noding();
+  }));
+  ul.querySelectorAll("li[data-unbind]").forEach(li => li.addEventListener("click", () => {
+    const [xy, lineId] = li.dataset.unbind.split("|");
+    const [x, y] = xy.split(",").map(Number);
+    draft.bindings = (draft.bindings || []).filter(b =>
+      !(b.line === lineId && b.junction.x === x && b.junction.y === y));
+    draw(); refreshHelperList(); noding();
+  }));
+}
 // ── polyline chain ─────────────────────────────────────────────────────
 function endChain(){
   if (!chain){ return; }
@@ -454,6 +562,8 @@ function chainAt(ev){
   if (Math.hypot(base[0] - chain.last[0], base[1] - chain.last[1]) < 0.1) return;
   draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: base[0], y1: base[1] });
   chain.last = [base[0], base[1]];
+  if (curSnap.kind === "grid" && curSnap.ref)
+    bindJunction(base, curSnap.ref.id);
   draw(); noding();
 }
 
@@ -536,6 +646,18 @@ svg.addEventListener("pointermove", ev => {
 });
 svg.addEventListener("pointerup", ev => {
   if (tool === "vertex" && vertexDrag){
+    // drop bindings the moved joint no longer satisfies
+    const o = vertexDrag.orig;
+    draft.bindings = (draft.bindings || []).filter(b => {
+      const onLine = (helperLines().find(h => h.id === b.line) || {}).pos;
+      if (onLine === undefined) return true;
+      const was = Math.hypot(o[0] - b.junction.x, o[1] - b.junction.y) < 0.1;
+      const now = Math.hypot(vertexDrag.work[0] - b.junction.x, vertexDrag.work[1] - b.junction.y) < 0.1;
+      if (!was) return true;
+      return Math.abs(onLine - now) < 1e-6 ? true
+        : (Math.max(Math.abs(o[0] - vertexDrag.work[0]), Math.abs(o[1] - vertexDrag.work[1])) > 0.25
+             ? false : true);
+    });
     vertexDrag = null;
     draw(); noding();
     feedback("joint moved — re-noding.");
@@ -543,6 +665,25 @@ svg.addEventListener("pointerup", ev => {
 });
 svg.addEventListener("click", ev => {
   const m = meters(ev, false);
+  if (tool === "grid"){
+    const h = draft.helpers || (draft.helpers = { master: null, lines: [] });
+    if (!h.master){
+      const axis = gAxis.value;
+      h.master = { axis, pos: (axis === "vertical" ? m[0] : m[1]), module: draft.grid };
+      feedback("master placed — click again for derived lines at module multiples.");
+    } else {
+      const axis = h.master.axis;
+      const perp = axis === "vertical" ? m[0] : m[1];
+      const k = Math.round((perp - h.master.pos) / h.master.module);
+      if (k === 0){ feedback("that is the master line itself — nothing to add."); return; }
+      const id = "L" + (h.lines.length + 1);
+      h.lines.push({ id, axis, offset: fmt(k * h.master.module) });
+      const colId = id;
+      feedback(colId + " at master + " + fmt(k * h.master.module) +
+        " m (module multiple) — drawn junctions that snap onto it bind automatically.");
+    }
+    draw(); refreshHelperList();
+  }
   if (tool === "draw") chainAt(ev);
 });
 svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
@@ -661,7 +802,7 @@ document.getElementById("btnClearSolved").addEventListener("click", () => {
 });
 function feedback(msg){ document.getElementById("feedback").textContent = msg; }
 
-[fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding();
+[fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding(); refreshHelperList();
 if (demo) solveDraft(); }));
 window.addEventListener("resize", () => draw());
 
@@ -678,7 +819,7 @@ if (demo){
     { key: "wet", label: "wet", items: ["*-bad", "keuken.*"], area_min: 370, area_max: 390, centroid: [20, 5] },
   ];
 }
-readDraft(); draw(); noding();
+readDraft(); draw(); noding(); refreshHelperList();
 if (demo) solveDraft();
 </script>
 </body>
