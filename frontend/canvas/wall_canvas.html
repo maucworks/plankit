@@ -546,38 +546,29 @@ function gatherSnapCandidates(m, prev, tolM){
             dist: Math.hypot(pt[0]-m[0], pt[1]-m[1]), tier: 5 });
     }
   }
-  // ── compound snap: on-seg ∩ ortho axis = one rigid point ────────────
+  // ── compound snap: on-seg ∩ perpendicular from prev = one rigid point ─
   // A compound exists when the cursor rides an existing stroke (on-seg
-  // within tol) AND the chain axis is orthogonally locked to prev (axis
-  // within tol). Their line intersection is a single point; when chosen it
-  // is pinned: the cursor cannot move until it exits the escape radius or
-  // the author presses Tab.
+  // within tol) AND the chain would be perpendicular to that stroke. The
+  // snap point is the foot of the perpendicular from prev onto the stroke
+  // line — a single point that works for ANY wall orientation (horizontal,
+  // vertical, or angled). When chosen it is pinned: the cursor cannot move
+  // until it exits the escape radius or the author presses Tab.
   if (prev){
-    const orthoV = Math.abs(m[0] - prev[0]) <= tolM ? prev[0] : null;
-    const orthoH = Math.abs(m[1] - prev[1]) <= tolM ? prev[1] : null;
     for (const c of cands){
       if (c.kind !== "onseg" || !c.ref) continue;
       const seg = c.ref;
       const sd = [seg.x1 - seg.x0, seg.y1 - seg.y0];
       const sLen2 = sd[0]*sd[0] + sd[1]*sd[1];
       if (sLen2 < 1e-12) continue;
-      const axes = [];
-      if (orthoV !== null) axes.push({ val: orthoV, fixed: "x", p: [orthoV, 0], d: [0, 1] });
-      if (orthoH !== null) axes.push({ val: orthoH, fixed: "y", p: [0, orthoH], d: [1, 0] });
-      for (const ax of axes){
-        const det = sd[0]*ax.d[1] - sd[1]*ax.d[0];
-        if (Math.abs(det) < 1e-12) continue;              // parallel
-        const t = ((ax.p[0]-seg.x0)*ax.d[1] - (ax.p[1]-seg.y0)*ax.d[0]) / det;
-        if (t < -0.05 || t > 1.05) continue;               // outside segment
-        const I = [seg.x0 + sd[0]*t, seg.y0 + sd[1]*t];
-        const dI = Math.hypot(I[0]-m[0], I[1]-m[1]);
-        if (dI > tolM) continue;
-        // push directly (bypass coordinate dedup — a compound can share a
-        // coordinate with the on-seg/joint candidate it refines)
-        cands.push({ m: [fmt(I[0]), fmt(I[1])], kind: "compound",
-                     ref: { onseg: seg, axis: ax.fixed, axisVal: ax.val },
-                     dist: dI, tier: -1 });
-      }
+      // foot of perpendicular from prev onto the segment's infinite line
+      const t = ((prev[0]-seg.x0)*sd[0] + (prev[1]-seg.y0)*sd[1]) / sLen2;
+      if (t < -0.05 || t > 1.05) continue;                 // outside segment
+      const I = [seg.x0 + sd[0]*t, seg.y0 + sd[1]*t];
+      const dI = Math.hypot(I[0]-m[0], I[1]-m[1]);
+      if (dI > tolM) continue;
+      cands.push({ m: [fmt(I[0]), fmt(I[1])], kind: "compound",
+                   ref: { onseg: seg, perpFrom: prev.slice() },
+                   dist: dI, tier: -1 });
     }
   }
   // always: the raw cursor itself
