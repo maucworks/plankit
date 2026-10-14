@@ -49,6 +49,8 @@
   .helper-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 8 5; opacity: 0.65; pointer-events: none; }
   .helper-line.master-helper { stroke: #2563eb; stroke-width: 2; opacity: 0.85; }
   .snap-line { stroke: #93c5fd; stroke-width: 2.5; pointer-events: none; }
+  .sel-edge { stroke: #f59e0b; stroke-width: 5; pointer-events: none; opacity: 0.55; }
+  .sel-vert { fill: none; stroke: #f59e0b; stroke-width: 2.5; pointer-events: none; }
   .dim { stroke: #64748b; stroke-width: 0.8; stroke-dasharray: 2 2; fill: #64748b; font-size: 10px; }
   .face-name { font-size: 12px; font-weight: 700; fill: #1d4ed8; }
   .door-mark { pointer-events: none; }
@@ -61,6 +63,7 @@
   <div id="canvasPane">
     <h1>plankit — wall graph canvas <span style="font-size:11px;color:#9ca3af">(template = a drawing)</span></h1>
     <div>
+      <b style="margin-left:2px">draw</b>
       <button class="tool active" data-tool="draw"  title="polyline chain: click = vertex, double-click = end">✏ draw</button>
       <button class="tool" data-tool="split"  title="click a line: point on the line splits it">✂ split</button>
       <button class="tool" data-tool="vertex" title="drag a drawn endpoint">⛓ vertex</button>
@@ -77,6 +80,9 @@
       <button class="tool" data-tool="erase"  title="click a segment to erase it">🧽 erase</button>
       <button class="tool" data-tool="grid"   title="helpers: place master grid line, then derived lines (g)">⊞ grid</button>
       <button class="tool" data-tool="sel"    title="idle">✥ idle</button>
+      <span style="border-left:1px solid #cbd5e1;margin:0 6px;height:18px;display:inline-block"></span>
+      <b>edit</b>
+      <button class="tool" data-tool="edit"    title="select and edit joints, edges, faces">✎ edit</button>
       <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
       <button id="btnDims" class="tool" title="toggle dimension lines (segments + face extents)">📏 dims</button>
     </div>
@@ -110,6 +116,16 @@
       <button id="btnClearTag">Clear tag</button>
     </div>
     <div id="regionInfo" style="font-size:12px;color:#374151;margin-top:8px">click a region with the ▦ tool.</div>
+
+    <h2>edit selected</h2>
+    <div id="selInfo" class="row" style="font-size:12px;color:#374151">nothing selected</div>
+    <div class="row" id="edgeActions" style="display:none">
+      <button id="btnApplyKind">Apply kind to selected edge</button>
+      <button id="btnDelEdge">Delete selected edge</button>
+    </div>
+    <div class="row" id="vtxActions" style="display:none">
+      <button id="btnSplitJoint">Split selected point</button>
+    </div>
 
     <h2>pve · gate</h2>
     <div class="row">
@@ -165,9 +181,9 @@ const PAD = 26;
 let draft = { kind: "wallgraph", name: "open-kern-wall", description: "",
   envelope: {x0: 0, y0: 0, x1: 40, y1: 26}, grid: 3.3,
   segments: [], edges: {}, faces: [] };
-let tool = "draw", selectedFace = null, pendingTag = null;
+let tool = "draw", selectedFace = null, pendingTag = null, selection = null, editDrag = null;
 let chain = null;          // running polyline: {first:[x,y], last:[x,y]}
-let vertexDrag = null;     // {pt, segIdxList, startM}
+let vertexDrag = null, edgeDrag = null;     // vertex drag / edge push
 let ghost = null, faceLayerDirty = true, rafOn = 0;
 
 const svg = document.getElementById("c");
@@ -273,6 +289,23 @@ function draw(){
     parts.push(`<circle class="door-mark" cx="${fmt(x1)}" cy="${fmt(y1)}" r="5" fill="#2563eb"/>
       <text class="door-label" x="${fmt(x1 + 5)}" y="${fmt(y1 - 2)}" font-size="10" fill="#2563eb">door</text>`);
   });
+  // selection highlight (edit tool)
+  if (selection && selection.type === "edge"){
+    const ss = draft.segments[selection.idx];
+    if (ss){
+      const [a,b] = m2vb(ss.x0, ss.y0), [c,d] = m2vb(ss.x1, ss.y1);
+      parts.push(`<line class="sel-edge" x1="${fmt(a)}" y1="${fmt(b)}" x2="${fmt(c)}" y2="${fmt(d)}"/>`);
+    }
+  }
+  if (selection && selection.type === "joint"){
+    const [a,b] = m2vb(selection.pt[0], selection.pt[1]);
+    parts.push(`<circle class="sel-vert" cx="${fmt(a)}" cy="${fmt(b)}" r="8"/>`);
+  }
+  if (selection && selection.type === "face" && selection.face && selection.face.verts){
+    const pts = selection.face.verts.map(v => m2vb(v[0], v[1]).map(n => fmt(n)).join(",")).join(" ");
+    parts.push(`<polygon points="${pts}" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="6 4" pointer-events="none"/>`);
+  }
+
   // joints: distinct segment endpoints (for the vertex tool)
   const seen = new Map();
   draft.segments.forEach((s, i) => {
@@ -322,16 +355,36 @@ function bindLayer(){
   svg.querySelectorAll(".zone-rect").forEach(() => {});
   svg.querySelectorAll(".vert").forEach(c => {
     c.addEventListener("pointerdown", ev => {
-      if (tool !== "vertex") return;
+      if (tool !== "vertex" && tool !== "edit") return;
       ev.stopPropagation();
       const pt = c.dataset.pt.split(",").map(Number);
       vertexDrag = { orig: [pt[0], pt[1]], work: [pt[0], pt[1]], segIdxList: c.dataset.segs.split(",").map(Number) };
+      if (tool === "edit"){
+        selection = { type: "joint", pt: [pt[0], pt[1]], segs: vertexDrag.segIdxList.slice() };
+        document.getElementById("selInfo").textContent = "vertex [" + pt.map(fmt).join(", ") + "] · " + selection.segs.length + " strokes";
+        document.getElementById("edgeActions").style.display = "none";
+        document.getElementById("vtxActions").style.display = "block";
+        draw();
+      }
       svg.setPointerCapture(ev.pointerId);
       feedback("moving joint " + pt + " — release to settle.");
     });
   });
   svg.querySelectorAll(".seg").forEach(l => {
-    l.addEventListener("click", ev => {
+    l.addEventListener("pointerdown", ev => {
+      if (tool !== "edit") return;
+      ev.stopPropagation();
+      const idx = Number(l.dataset.idx);
+      const s = draft.segments[idx];
+      if (!s) return;
+      const pt = meters(ev, false);
+      edgeDrag = { idx, orig: { x0: s.x0, y0: s.y0, x1: s.x1, y1: s.y1 },
+                 pointerStart: pt.slice(),
+                 axis: (Math.abs(s.x1 - s.x0) >= Math.abs(s.y1 - s.y0)) ? "horizontal" : "vertical" };
+      svg.setPointerCapture(ev.pointerId);
+      feedback("pushing edge " + idx + " (release to settle)");
+    });
+  l.addEventListener("click", ev => {
       if (tool === "etag"){
         const kind = document.getElementById("edgeKind").value;
         draft.edges[l.dataset.idx] = kind;
@@ -385,6 +438,18 @@ function bindLayer(){
   });
 }
 function suggestedKey(face){ return "room" + (draft.faces.length + 1); }
+function pointInPoly(pt, poly){
+  let inside = false;
+  if (!poly || !poly.verts) return false;
+  const pts = poly.verts, v = poly.verts[poly.verts.length - 1];
+  let j = pts.length - 1;
+  for (let i = 0; i < pts.length; j = i++){
+    const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+    const hit = ((yi > pt[1]) !== (yj > pt[1])) && (pt[0] < (xj - xi) * (pt[1]-yi)/(yj-yi) + xi);
+    if (hit) inside = !inside;
+  }
+  return inside;
+}
 function currentFaces(){
   return draft._faces || [];
 }
@@ -835,7 +900,7 @@ svg.addEventListener("pointermove", ev => {
   });
 });
 svg.addEventListener("pointermove", ev => {
-  if (tool === "vertex" && vertexDrag){
+  if ((tool === "vertex" || tool === "edit") && vertexDrag){
     withFrame(() => {
       const [mx, my] = meters(ev, false);
       if (Math.abs(mx - vertexDrag.work[0]) < 0.05 && Math.abs(my - vertexDrag.work[1]) < 0.05) return;
@@ -856,8 +921,27 @@ svg.addEventListener("pointermove", ev => {
     });
   }
 });
+svg.addEventListener("pointermove", ev => {
+  if (tool === "edit" && edgeDrag){
+    withFrame(() => {
+      const [mx, my] = meters(ev, false);
+      const ed = edgeDrag, orig = ed.orig, curLive = draft.segments[ed.idx];
+      if (ed.axis === "horizontal"){
+        const dy = my - ed.pointerStart[1];
+        const y = orig.y0 + dy;
+        curLive.y0 = y; curLive.y1 = y;
+      } else {
+        const dx = mx - ed.pointerStart[0];
+        const x = orig.x0 + dx;
+        curLive.x0 = x; curLive.x1 = x;
+      }
+      draw();
+      runLiveSolve();
+    });
+  }
+});
 svg.addEventListener("pointerup", ev => {
-  if (tool === "vertex" && vertexDrag){
+  if ((tool === "vertex" || tool === "edit") && vertexDrag){
     // drop bindings the moved joint no longer satisfies
     const o = vertexDrag.orig;
     draft.bindings = (draft.bindings || []).filter(b => {
@@ -870,6 +954,7 @@ svg.addEventListener("pointerup", ev => {
         : (Math.max(Math.abs(o[0] - vertexDrag.work[0]), Math.abs(o[1] - vertexDrag.work[1])) > 0.25
              ? false : true);
     });
+    if (selection && selection.type === "joint") selection.pt = vertexDrag.work.slice();
     vertexDrag = null;
     draw(); noding();
     nodeAllStrokes();
@@ -877,7 +962,77 @@ svg.addEventListener("pointerup", ev => {
     feedback("joint moved — live solution refreshed.");
   }
 });
+svg.addEventListener("pointerup", ev => {
+  if (tool === "edit" && edgeDrag){
+    edgeDrag = null;
+    draw(); noding();
+    nodeAllStrokes();
+    flushLiveSolve();
+    feedback("edge moved — live solution refreshed.");
+  }
+});
 svg.addEventListener("click", ev => {
+  if (tool === "edit"){
+    const pt = meters(ev, false);
+    const tol = 12 / layout().s;
+    const joints = allJoints();
+    let selJoint = null, jd = tol;
+    for (const jp of joints){
+      const d = Math.hypot(jp[0]-pt[0], jp[1]-pt[1]);
+      if (d < jd){ selJoint = jp; jd = d; }
+    }
+    let selEdge = null, ed = tol;
+    draft.segments.forEach((seg, idx) => {
+      const pr = projectOnSeg(pt, seg);
+      if (pr && pr.dist < ed){ selEdge = idx; ed = pr.dist; }
+    });
+    let selFace = currentFaces().find(f =>
+      pointInPoly(pt, f.verts));
+    // precedence: joint > edge > face (mirrors snap)
+    if (selJoint){
+      selection = { type: "joint", pt: selJoint.slice(), segs: [...(svg._joints ? svg._joints.get(selJoint.join(",")) ? [] : [] : [])] };
+      // find joints key
+      for (const [k, idxList] of (svg._joints || new Map())){
+        if (k === selJoint.join(",")){ selection.segs = idxList.slice(); break; }
+      }
+      document.getElementById("selInfo").textContent = "vertex [" + selJoint.map(v => fmt(v)).join(", ") + "]\u00b7 " + selection.segs.length + " strokes";
+      document.getElementById("edgeActions").style.display = "none";
+      document.getElementById("vtxActions").style.display = "block";
+      document.getElementById("face-form") && 0;
+    } else if (selEdge !== null){
+      selection = { type: "edge", idx: selEdge };
+      const seg = draft.segments[selEdge];
+      document.getElementById("selInfo").textContent = "edge " + selEdge + " (" + fmt(Math.hypot(seg.x1-seg.x0, seg.y1-seg.y0)) + " m) " + (draft.edges[selEdge] || draft.edges[String(selEdge)] || "wall");
+      document.getElementById("edgeActions").style.display = "block";
+      document.getElementById("vtxActions").style.display = "none";
+      const ek = document.getElementById("edgeKind");
+      ek.value = (draft.edges[selEdge] != null ? draft.edges[selEdge] : draft.edges[String(selEdge)] || "wall");
+    } else if (selFace){
+      selection = { type: "face", face: selFace };
+      pendingTag = selFace;
+      fKey.value = selFace.key || suggestedKey();
+      fLbl.value = selFace.label || "";
+      fRegionName.value = selFace.name || "";
+      fRegionDescr.value = selFace.description || "";
+      fItems.value = (selFace.items || []).join(", ");
+      fAmin.value = selFace.area_min ?? "";
+      fAmax.value = selFace.area_max ?? "";
+      const c = selFace.color && selFace.color !== "auto" ? selFace.color : "#9fc6e8";
+      fColor.value = c; fColorUse.checked = Boolean(selFace.color && selFace.color !== "auto");
+      fColor.disabled = false; fColorUse.disabled = false;
+      document.getElementById("regionInfo").textContent = "index " + selFace.index + " \u00b7 " + fmt(selFace.area) + " m2";
+      document.getElementById("selInfo").textContent = "face #" + selFace.index + " (" + selFace.key + ")";
+      document.getElementById("edgeActions").style.display = "none";
+      document.getElementById("vtxActions").style.display = "none";
+    } else {
+      selection = null;
+      document.getElementById("selInfo").textContent = "nothing selected";
+      document.getElementById("edgeActions").style.display = "none";
+      document.getElementById("vtxActions").style.display = "none";
+    }
+    draw();
+    return;
+  }
   const m = meters(ev, false);
   if (tool === "grid"){
     const h = draft.helpers || (draft.helpers = { master: null, lines: [] });
@@ -990,6 +1145,36 @@ document.getElementById("btnClearTag").addEventListener("click", () => {
     Math.hypot(f.centroid[0] - pendingTag.centroid[0], f.centroid[1] - pendingTag.centroid[1]) > 0.5);
   pendingTag = null; draw(); noding();
   feedback("tag cleared.");
+});
+
+// ── edit selected geometry ─────────────────────────────────────────
+document.getElementById("btnApplyKind").addEventListener("click", () => {
+  if (!selection || selection.type !== "edge"){ feedback("select an edge first (edit tool)."); return; }
+  const i = selection.idx;
+  const kind = document.getElementById("edgeKind").value;
+  if (kind === "door"){
+    const s = draft.segments[i];
+    const run = Math.hypot(s.x1 - s.x0, s.y1 - s.y0);
+    if (run < 1.2 - 1e-9){ feedback("edge is only " + fmt(run) + " m long — needs 1.20 m."); return; }
+  }
+  draft.edges[i] = kind;
+  if (draft.edges[String(i)] != null) delete draft.edges[String(i)];
+  draw(); noding();
+  feedback("edge " + i + " classified as " + kind + ".");
+});
+document.getElementById("btnDelEdge").addEventListener("click", () => {
+  if (!selection || selection.type !== "edge"){ feedback("select an edge first (edit tool)."); return; }
+  const idx = selection.idx;
+  draft.edges = Object.fromEntries(Object.entries(draft.edges)
+    .map(([k, v]) => [String(Number(k) >= idx ? Number(k) - 1 : Number(k)), v])
+    .filter(([k]) => Number(k) !== -1));
+  draft.segments.splice(idx, 1);
+  selection = null;
+  draw(); noding();
+  nodeAllStrokes();
+  document.getElementById("selInfo").textContent = "nothing selected";
+  document.getElementById("edgeActions").style.display = "none";
+  feedback("edge deleted.");
 });
 
 // ── drafts ─────────────────────────────────────────────────────────────
