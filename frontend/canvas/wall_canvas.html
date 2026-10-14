@@ -894,7 +894,7 @@ function pointOnSeg(px, py, s){
 // intersection) instead of a stale preview curSnap or the raw cursor grid.
 function chainAt(ev){
   const L = layout();
-  const raw = meters(ev, false);
+  const raw = metersRaw(ev);
   const tolM = 11 / L.s;
   curSnap = snapPoint(raw, chain ? chain.last.slice() : null, tolM, null);
   let base = curSnap.m;
@@ -944,6 +944,18 @@ function splitSegmentAt(idx, ev){
   feedback("split segment " + idx + " at [" + mx + ", " + my + "].");
 }
 
+function metersRaw(ev){
+  // exact cursor in metres (no 5 cm grid rounding) — the snapping solver uses
+  // unquantised coordinates so a compound candidate cannot jitter between snaps.
+  const p = pointerView(ev);
+  const L = layout();
+  const mx = draft.envelope.x0 + (p.x - L.ox) / L.s;
+  const my = draft.envelope.y1 - (p.y - L.oy) / L.s;
+  const cx = Math.min(Math.max(mx, draft.envelope.x0), draft.envelope.x1);
+  const cy = Math.min(Math.max(my, draft.envelope.y0), draft.envelope.y1);
+  return [fmt(cx), fmt(cy)];
+}
+
 function meters(ev, snapLoose){
   const p = pointerView(ev);
   const L = layout();
@@ -959,7 +971,7 @@ function meters(ev, snapLoose){
 svg.addEventListener("pointermove", ev => {
   withFrame(() => {
     if (tool === "draw"){
-      const raw = meters(ev, false);
+      const raw = metersRaw(ev);
       const tolM = 11 / layout().s;   // ~11 px on screen
       lastRawMForSnap = raw;
       lastPrevForSnap = chain ? chain.last.slice() : null;
