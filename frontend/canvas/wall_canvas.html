@@ -870,8 +870,13 @@ function chainAt(ev){
   if (curSnap && curSnap.m) base = curSnap.m;         // the previewed snap is the truth
   if (!chain){ chain = { first: [base[0], base[1]], last: [base[0], base[1]] };
     feedback("chain started — the green ring = existing point, the orange guide = perpendicular to a wall."); return; }
-  if (curSnap.kind === "joint" && curSnap.ref &&
-      Math.abs(curSnap.ref[0] - chain.first[0]) < 1e-9 && Math.abs(curSnap.ref[1] - chain.first[1]) < 1e-9){
+  // treat a compound snap (or any snap landing on a point coincident with the
+  // chain origin) as a close-joint: a rigid compound vertex can still be used as
+  // the closing anchor even though its kind label is not "joint".
+  const sameAsFirst = Math.hypot(base[0] - chain.first[0], base[1] - chain.first[1]) < 1e-6;
+  if ((curSnap.kind === "joint" && curSnap.ref &&
+       Math.abs(curSnap.ref[0] - chain.first[0]) < 1e-9 &&
+       Math.abs(curSnap.ref[1] - chain.first[1]) < 1e-9) || sameAsFirst){
     // closed by clicking the first joint again: push the closing stroke
     // to the EXACT first point (triangles and ngons close like quads)
     const gap = Math.hypot(chain.last[0] - chain.first[0], chain.last[1] - chain.first[1]);
