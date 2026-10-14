@@ -531,7 +531,7 @@ function gatherSnapCandidates(m, prev, tolM){
           if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
           const locked = [fmt(prev[0] + vlen*px), fmt(prev[1] + vlen*py)];
           add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
-               dist: Math.hypot(locked[0]-m[0], locked[1]-m[1]), tier: 3, axis: "both" });
+               dist: Math.hypot(locked[0]-m[0], locked[1]-m[1]), tier: -1, axis: "both" });
         }
       }
     }
