@@ -504,7 +504,11 @@ function gatherSnapCandidates(m, prev, tolM){
   // 2. on-wall snapping (riding a drawn stroke)
   for (const seg of draft.segments){
     const pr = projectOnSeg(m, seg);
-    if (pr && pr.dist <= tolM) add({ m: pr.pt.slice(), kind: "onseg", ref: seg, dist: pr.dist, tier: 1 });
+    if (pr && pr.dist <= tolM){
+      const ax = Math.abs(seg.x1 - seg.x0) < 1e-9 ? "x"
+               : Math.abs(seg.y1 - seg.y0) < 1e-9 ? "y" : "edge";
+      add({ m: pr.pt.slice(), kind: "onseg", ref: seg, dist: pr.dist, tier: 1, axis: ax });
+    }
   }
   // 2b. helper grid lines
   for (const hl of helperLines()){
@@ -1397,5 +1401,6 @@ if (demo){
   solveDraft().then(gateDraft);
 }
 </script>
+
 </body>
 </html>
