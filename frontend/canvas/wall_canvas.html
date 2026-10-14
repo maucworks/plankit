@@ -496,6 +496,14 @@ function gatherSnapCandidates(m, prev, tolM){
     if (seenPts.has(k)) return;
     seenPts.add(k); cands.push(c);
   };
+  // 0. latched compound: while the cursor remains near the compound's actual
+  //    point, keep serving that exact point as a candidate even if another
+  //    candidate-generation pass this frame happened not to recreate it.
+  if (snapLock && snapLock.kind === "simult"){
+    const d = Math.hypot(snapLock.pt[0]-m[0], snapLock.pt[1]-m[1]);
+    if (d <= tolM * 4)
+      add({ m: snapLock.pt.slice(), kind: "simult", ref: null, dist: d, tier: -3, axis: "both" });
+  }
   // 1. joints already on the drawing
   for (const p of allJoints()){
     const d = Math.hypot(p[0] - m[0], p[1] - m[1]);
@@ -612,6 +620,10 @@ function snapPoint(m, prev, tolM, forceIdx){
   if (forceIdx == null) snapActiveIdx = 0;
   else snapActiveIdx = Math.max(0, Math.min(cands.length-1, forceIdx));
   idx = snapActiveIdx;
+  if (cands[idx] && cands[idx].kind === "simult")
+    snapLock = { pt: cands[idx].m.slice(), kind: "simult" };
+  else if (!cands.length || cands[idx].kind === "free")
+    snapLock = null;
   const base = cands.length ? cands[idx] : { m: [fmt(m[0]),fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 };
   const out = { m: base.m.slice(), kind: base.kind, ref: base.ref,
                 candCount: cands.length || 1, candIdx: idx };
@@ -621,6 +633,11 @@ function snapPoint(m, prev, tolM, forceIdx){
 let curSnap = { m: null, kind: "free", ref: null, candCount: 0, candIdx: 0 };   // shared draw state
 let snapCandidates = [], snapActiveIdx = 0, lastRawMForSnap = null,
     lastPrevForSnap = null, lastTolMForSnap = 0.1;
+// once a true compound (perp + on-wall) appears, we "latch" onto it so the
+// cursor cannot fall out of it by a few pixels — it stays locked as the
+// chosen snap until the author presses Tab or moves far outside the snap
+// zone. Without this, wiggle *out of* the compound into free space was possible.
+let snapLock = null;   // { pt:[x,y], kind:"simult" }
 function renderSnapFx(snap){
   let parts = "";
   // show every viable candidate (excluding free) subtly, so when two snaps
