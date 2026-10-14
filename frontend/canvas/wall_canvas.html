@@ -546,6 +546,40 @@ function gatherSnapCandidates(m, prev, tolM){
             dist: Math.hypot(pt[0]-m[0], pt[1]-m[1]), tier: 5 });
     }
   }
+  // ── compound snap: on-seg ∩ ortho axis = one rigid point ────────────
+  // A compound exists when the cursor rides an existing stroke (on-seg
+  // within tol) AND the chain axis is orthogonally locked to prev (axis
+  // within tol). Their line intersection is a single point; when chosen it
+  // is pinned: the cursor cannot move until it exits the escape radius or
+  // the author presses Tab.
+  if (prev){
+    const orthoV = Math.abs(m[0] - prev[0]) <= tolM ? prev[0] : null;
+    const orthoH = Math.abs(m[1] - prev[1]) <= tolM ? prev[1] : null;
+    for (const c of cands){
+      if (c.kind !== "onseg" || !c.ref) continue;
+      const seg = c.ref;
+      const sd = [seg.x1 - seg.x0, seg.y1 - seg.y0];
+      const sLen2 = sd[0]*sd[0] + sd[1]*sd[1];
+      if (sLen2 < 1e-12) continue;
+      const axes = [];
+      if (orthoV !== null) axes.push({ val: orthoV, fixed: "x", p: [orthoV, 0], d: [0, 1] });
+      if (orthoH !== null) axes.push({ val: orthoH, fixed: "y", p: [0, orthoH], d: [1, 0] });
+      for (const ax of axes){
+        const det = sd[0]*ax.d[1] - sd[1]*ax.d[0];
+        if (Math.abs(det) < 1e-12) continue;              // parallel
+        const t = ((ax.p[0]-seg.x0)*ax.d[1] - (ax.p[1]-seg.y0)*ax.d[0]) / det;
+        if (t < -0.05 || t > 1.05) continue;               // outside segment
+        const I = [seg.x0 + sd[0]*t, seg.y0 + sd[1]*t];
+        const dI = Math.hypot(I[0]-m[0], I[1]-m[1]);
+        if (dI > tolM) continue;
+        // push directly (bypass coordinate dedup — a compound can share a
+        // coordinate with the on-seg/joint candidate it refines)
+        cands.push({ m: [fmt(I[0]), fmt(I[1])], kind: "compound",
+                     ref: { onseg: seg, axis: ax.fixed, axisVal: ax.val },
+                     dist: dI, tier: -1 });
+      }
+    }
+  }
   // always: the raw cursor itself
   add({ m: [fmt(m[0]), fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 });
   cands.sort((a,b) => a.tier - b.tier || a.dist - b.dist);
@@ -561,14 +595,28 @@ function snapPoint(m, prev, tolM, forceIdx){
   const base = cands.length ? cands[idx] : { m: [fmt(m[0]),fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 };
   const out = { m: base.m.slice(), kind: base.kind, ref: base.ref,
                 candCount: cands.length || 1, candIdx: idx };
+  if (base.kind === "compound") compoundLock = { pt: base.m.slice(), px: COMPOUND_ESCAPE_PX };
+  else if (base.kind === "free") compoundLock = null;
   return out;
 }
 
 let curSnap = { m: null, kind: "free", ref: null, candCount: 0, candIdx: 0 };   // shared draw state
 let snapCandidates = [], snapActiveIdx = 0, lastRawMForSnap = null,
     lastPrevForSnap = null, lastTolMForSnap = 0.1;
+// compound lock: when a compound snap is chosen the cursor is pinned to that
+// exact point until the author moves > COMPOUND_ESCAPE_PX px away or tabs out
+const COMPOUND_ESCAPE_PX = 28;
+let compoundLock = null;   // { pt:[x,y], px:number }
 function renderSnapFx(snap){
   let parts = "";
+  if (snap && snap.kind === "compound"){
+    const [sx, sy] = m2vb(snap.m[0], snap.m[1]);
+    parts += `<circle cx="${fmt(sx)}" cy="${fmt(sy)}" r="6" fill="none" `
+           + `stroke="#dc2626" stroke-width="2.5"/>`;
+    parts += `<circle cx="${fmt(sx)}" cy="${fmt(sy)}" r="2" fill="#dc2626"/>`;
+    parts += `<text x="${fmt(sx + 10)}" y="${fmt(sy - 10)}" font-size="10" `
+           + `font-weight="700" fill="#dc2626">compound · tab to exit</text>`;
+  }
   if (snap && snap.kind === "joint" && snap.ref)
     parts += `<circle cx="${m2vb(snap.ref[0], snap.ref[1])[0]}" cy="${m2vb(snap.ref[0], snap.ref[1])[1]}"
       r="7" fill="none" stroke="#059669" stroke-width="2.5"/>`;
@@ -687,6 +735,7 @@ function refreshHelperList(){
 function endChain(){
   if (!chain){ return; }
   chain = null;
+  compoundLock = null;
   document.getElementById("rubber").style.display = "none";
   draw(); noding();
   feedback("polyline ended — " + draft.segments.length + " segments, noding…");
@@ -883,6 +932,18 @@ svg.addEventListener("pointermove", ev => {
       lastTolMForSnap = tolM;
       snapActiveIdx = 0;
       curSnap = snapPoint(raw, chain ? chain.last : null, tolM, 0);
+      // compound lock: pin the cursor to the rigid point while inside the
+      // escape radius; release once the cursor moves beyond it
+      if (compoundLock){
+        const L = layout();
+        const dpx = Math.hypot((compoundLock.pt[0] - raw[0]) * L.s,
+                               (compoundLock.pt[1] - raw[1]) * L.s);
+        if (dpx > compoundLock.px){ compoundLock = null; }
+        else {
+          curSnap = { m: compoundLock.pt.slice(), kind: "compound", ref: null,
+                      candCount: curSnap.candCount, candIdx: curSnap.candIdx };
+        }
+      }
       const m = curSnap.m;
       const [mx, my] = m2vb(m[0], m[1]);
       const rb = document.getElementById("rubber");
@@ -1315,6 +1376,7 @@ window.addEventListener("keydown", ev => {
   if (ev.key === "Escape" && chain){ endChain(); ev.preventDefault(); return; }
   if (ev.key !== "Tab" || tool !== "draw") return;
   ev.preventDefault();
+  if (compoundLock){ compoundLock = null; }   // first Tab exits the compound
   if (!lastRawMForSnap || !chain) return;
   snapActiveIdx = snapCandidates.length ? (snapActiveIdx + (ev.shiftKey ? -1 : 1) + snapCandidates.length) % snapCandidates.length : 0;
   curSnap = snapPoint(lastRawMForSnap, lastPrevForSnap, lastTolMForSnap, snapActiveIdx);
