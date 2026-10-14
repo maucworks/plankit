@@ -546,7 +546,53 @@ function gatherSnapCandidates(m, prev, tolM){
             dist: Math.hypot(pt[0]-m[0], pt[1]-m[1]), tier: 5 });
     }
   }
-  // always: the raw cursor itself
+  // ── simultaneous snaps: an intersection of two independent constraints
+  //    (for instance x from a wall, y from a perpendicular to another wall).
+  //    The landing point therefore satisfies both at once. Only include
+  //    composites that actually stay on (or cross-proximate to) geometry, so
+  //    the cursor "lands" on real walls instead of drifting into free space.
+  if (prev || draft.segments.length){
+    const MAX = Math.max(tolM * 3, 0.15);
+    const xs = cands.map(c => c.m[0]), ys = cands.map(c => c.m[1]);
+    const candPool = cands.slice();
+    for (const ca of candPool){
+      for (const cb of candPool){
+        let x = ca.m[0], y = cb.m[1];
+        if (x === undefined || y === undefined) continue;
+        // distance from raw cursor to the composite intersection is what matters
+        const dx = x - m[0], dy = y - m[1];
+        if ((dx*dx + dy*dy) > MAX*MAX) continue;
+        // geometry validation: composite rests on at least one wall, or is
+        // the intersection of two real axes (grid walls/joint axes)
+        let onWall = false;
+        for (const seg of draft.segments){
+          const pr = projectOnSeg([x,y], seg);
+          if (pr && pr.dist <= tolM){ onWall = true; break; }
+        }
+        if (!onWall){
+          // allow crossing of a vertical and a horizontal grid line
+          const hl = helperLines ? helperLines() : [];
+          let hOk = false;
+          // vertical helper => x fixed; horizontal => y fixed
+          for (const l of hl){
+            if (l.axis === "vertical" && Math.abs(l.pos - x) <= tolM) hOk = true;
+            if (l.axis === "horizontal" && Math.abs(l.pos - y) <= tolM) hOk = true;
+          }
+          // also allow vertex-only (joint) intersections
+          const nearJoy = allJoints().some(j => Math.hypot(j[0]-x, j[1]-y) <= tolM);
+          const onJoint = allJoints().some(j => j[0] === x && j[1] === y);
+          if (!(nearJoy || onJoint)) continue;
+          // restrict to either a helper crossing pair or proximity to joint
+          const hVertical = hl.some(l => l.axis === "vertical" && Math.abs(l.pos - x) <= tolM);
+          const hHorizontal = hl.some(l => l.axis === "horizontal" && Math.abs(l.pos - y) <= tolM);
+          if (!((hVertical && hHorizontal))) continue;
+        }
+        // distinct from any single-constraint candidate is fine (dedup cleans later)
+        add({ m: [fmt(x), fmt(y)], kind: "simult", ref: null,
+              dist: Math.hypot(x-m[0], y-m[1]), tier: -1 });
+      }
+    }
+  }
   add({ m: [fmt(m[0]), fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 });
   cands.sort((a,b) => a.tier - b.tier || a.dist - b.dist);
   return cands;
