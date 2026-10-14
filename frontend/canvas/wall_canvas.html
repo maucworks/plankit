@@ -570,6 +570,9 @@ function gatherSnapCandidates(m, prev, tolM){
     for (let i = 0, N = pool.length; i < N; i++){
       for (let j = i + 1; j < N; j++){
         const A = pool[i], B = pool[j];
+        // user-defined compound: a perpendicular lock PLUS another snap
+        // contributor (usually an on-segment projection) must be involved.
+        if (A.kind !== "perp" && B.kind !== "perp") continue;
         const combos = [
           [A.m[0], B.m[1]],
           [B.m[0], A.m[1]],
@@ -1412,6 +1415,7 @@ if (demo){
   solveDraft().then(gateDraft);
 }
 </script>
+
 
 
 </body>
