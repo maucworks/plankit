@@ -605,6 +605,124 @@ function endChain(){
 }
 document.getElementById("btnEnd").addEventListener("click", endChain);
 
+// ── keep the stroke list = the DCEL edge skeleton ─────────────────────
+// A stroke in the canvas is a stored list entry, but the DCEL treats an
+// edge as the section between two junctions. Whenever a new stroke is
+// committed (or a vertex dragged), split every stroke at every crossing
+// and T-junction: that way a crossing becomes two endpoints and the
+// author can delete one arm of a cross without deleting the whole thing.
+function nodeAllStrokes(){
+  const strokes = draft.segments.map(s => ({ x0: +s.x0, y0: +s.y0, x1: +s.x1, y1: +s.y1 }));
+  const kinds = strokes.map((_, i) => edgeKind(i));
+  if (!strokes.length) return;
+  // 1. collapse coincident identical strokes, keeping the higher-specificity kind
+  const spec = { door: 5, access: 4, open: 3, facade: 2, wall: 1 };
+  const kept = [];
+  for (let i = 0; i < strokes.length; i++){
+    let collapsed = false;
+    for (let j = 0; j < kept.length; j++){
+      if (identicalLine(strokes[i], kept[j].seg)){
+        if (spec[kinds[i]] > spec[kept[j].kind]) kept[j].kind = kinds[i];
+        else if (spec[kinds[i]] === spec[kept[j].kind] && kinds[i] !== kept[j].kind)
+          feedback("overlapping strokes merged - classify them again if you meant a door or opening.");
+        collapsed = true;
+        break;
+      }
+    }
+    if (!collapsed) kept.push({ seg: strokes[i], kind: kinds[i] });
+  }
+  const inSt = kept.map(k => k.seg), inKind = kept.map(k => k.kind);
+  const n = inSt.length;
+  // 2. collect junction points per stroke (endpoints + crossings + T-junctions)
+  const ptsPer = inSt.map(s => [{ x: s.x0, y: s.y0 }, { x: s.x1, y: s.y1 }]);
+  for (let i = 0; i < n; i++){
+    for (let j = i + 1; j < n; j++){
+      const p = segIntersect(inSt[i], inSt[j]);
+      if (p){ ptsPer[i].push(p); ptsPer[j].push(p); }
+    }
+  }
+  for (let i = 0; i < n; i++){
+    for (let ei of [0,1]){
+      const e = ei === 0 ? inSt[i].x0 : inSt[i].x1;
+      const fY = ei === 0 ? inSt[i].y0 : inSt[i].y1;
+      for (let j = 0; j < n; j++){
+        if (j === i) continue;
+        if (pointOnSeg(e, fY, inSt[j]))
+          ptsPer[j].push({ x: e, y: fY });
+      }
+    }
+  }
+  // 3. split
+  const pieces = [];
+  for (let i = 0; i < n; i++){
+    const s = inSt[i], dx = s.x1 - s.x0, dy = s.y1 - s.y0, L = Math.hypot(dx, dy);
+    if (L < 1e-9) continue;
+    const ts = ptsPer[i].map(p => (Math.abs(dx) > 1e-9) ? (p.x - s.x0)/dx
+                              : (Math.abs(dy) > 1e-9 ? (p.y - s.y0)/dy : 0))
+        .filter(t => Number.isFinite(t) && t >= -1e-9 && t <= 1 + 1e-9);
+    let uniq = ts.slice().sort((a,b) => a - b)
+        .filter((t, i, arr) => i === 0 || t - arr[i-1] > 1e-9);
+    if (!uniq.length) uniq = [0,1];
+    else {
+      if (uniq[0] > 1e-9) uniq.unshift(0);
+      if (uniq[uniq.length-1] < 1 - 1e-9) uniq.push(1);
+    }
+    for (let k = 0; k < uniq.length - 1; k++){
+      const ta = uniq[k], tb = uniq[k+1];
+      if (tb - ta < 1e-9) continue;
+      const ax = s.x0 + dx*ta, ay = s.y0 + dy*ta;
+      const bx = s.x0 + dx*tb, by = s.y0 + dy*tb;
+      if (Math.hypot(bx-ax, by-ay) < 1e-9) continue;
+      pieces.push({ seg: { x0: ax, y0: ay, x1: bx, y1: by }, kind: inKind[i] });
+    }
+  }
+  // 4. dedupe identical sub-segments
+  const out = []; const seen = new Set();
+  for (const p of pieces){
+    const a = [p.seg.x0, p.seg.y0, p.seg.x1, p.seg.y1].map(v => Math.round(v*1e6)).join(",");
+    const b = [p.seg.x1, p.seg.y1, p.seg.x0, p.seg.y0].map(v => Math.round(v*1e6)).join(",");
+    const key = a < b ? a : b;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  draft.segments = out.map(p => ({ x0: fmt(p.seg.x0), y0: fmt(p.seg.y0),
+                                       x1: fmt(p.seg.x1), y1: fmt(p.seg.y1) }));
+  const ne = {};
+  out.forEach((p, i) => { ne[i] = p.kind && p.kind !== "undefined" ? p.kind : "wall"; });
+  draft.edges = ne;
+
+  function identicalLine(A, B){
+    const N1 = normLine(A), N2 = normLine(B);
+    return Math.abs(N1.x0 - N2.x0) < 1e-9 && Math.abs(N1.y0 - N2.y0) < 1e-9 &&
+           Math.abs(N1.x1 - N2.x1) < 1e-9 && Math.abs(N1.y1 - N2.y1) < 1e-9;
+  }
+  function normLine(a){
+    return (a.x0 < a.x1 || (a.x0 === a.x1 && a.y0 <= a.y1))
+      ? { x0: a.x0, y0: a.y0, x1: a.x1, y1: a.y1 }
+      : { x0: a.x1, y0: a.y1, x1: a.x0, y1: a.y0 };
+  }
+}
+
+function segIntersect(a, b){
+  const d1x = a.x1 - a.x0, d1y = a.y1 - a.y0;
+  const d2x = b.x1 - b.x0, d2y = b.y1 - b.y0;
+  const det = d1x*d2y - d1y*d2x;
+  if (Math.abs(det) < 1e-12) return null;
+  const t = ((b.x0 - a.x0)*d2y - (b.y0 - a.y0)*d2x) / det;
+  const u = ((b.x0 - a.x0)*d1y - (b.y0 - a.y0)*d1x) / det;
+  if (t < -1e-9 || t > 1+1e-9 || u < -1e-9 || u > 1+1e-9) return null;
+  return { x: a.x0 + d1x*t, y: a.y0 + d1y*t };
+}
+function pointOnSeg(px, py, s){
+  const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+  const L = Math.hypot(dx, dy);
+  if (L < 1e-9) return false;
+  const t = (Math.abs(dx) > 1e-9) ? (px - s.x0)/dx : (dy? (py - s.y0)/dy : 0);
+  return Math.abs(px - (s.x0 + t*dx)) < 1e-6 && Math.abs(py - (s.y0 + t*dy)) < 1e-6 &&
+         t >= -1e-9 && t <= 1+1e-9;
+}
+
 function chainAt(ev){
   const L = layout();
   let base = meters(ev, false);
@@ -618,6 +736,7 @@ function chainAt(ev){
     const gap = Math.hypot(chain.last[0] - chain.first[0], chain.last[1] - chain.first[1]);
     if (gap >= 0.05){
       draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: chain.first[0], y1: chain.first[1] });
+      nodeAllStrokes();
     }
     endChain();
     feedback("chain closed — " + draft.segments.length + " segments, noding…");
@@ -625,6 +744,7 @@ function chainAt(ev){
   }
   if (Math.hypot(base[0] - chain.last[0], base[1] - chain.last[1]) < 0.1) return;
   draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: base[0], y1: base[1] });
+  nodeAllStrokes();
   chain.last = [base[0], base[1]];
   if (curSnap.kind === "grid" && curSnap.ref)
     bindJunction(base, curSnap.ref.id);
@@ -725,6 +845,7 @@ svg.addEventListener("pointerup", ev => {
     });
     vertexDrag = null;
     draw(); noding();
+    nodeAllStrokes();
     flushLiveSolve();   // settle the dragged solution immediately
     feedback("joint moved — live solution refreshed.");
   }
@@ -905,7 +1026,7 @@ document.getElementById("btnApply").addEventListener("click", () => {
     return a && b ? { x0: fmt(a[0]), y0: fmt(a[1]), x1: fmt(b[0]), y1: fmt(b[1]) } : seg;
   });
   draft._solved = null;
-  draw(); noding();
+  nodeAllStrokes();
   feedback("solution applied to the draft — bands should read ✓ on a re-solve.");
 });
 document.getElementById("btnClearSolved").addEventListener("click", () => {
