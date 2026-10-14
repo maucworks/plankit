@@ -421,7 +421,7 @@ function bindLayer(){
         document.getElementById("vtxActions").style.display = "block";
         draw();
       }
-      svg.setPointerCapture(ev.pointerId);
+      safePointerCapture(svg, ev);
       feedback("moving joint " + pt + " — release to settle.");
     });
   });
@@ -436,7 +436,7 @@ function bindLayer(){
       edgeDrag = { idx, orig: { x0: s.x0, y0: s.y0, x1: s.x1, y1: s.y1 },
                  pointerStart: pt.slice(),
                  axis: (Math.abs(s.x1 - s.x0) >= Math.abs(s.y1 - s.y0)) ? "horizontal" : "vertical" };
-      svg.setPointerCapture(ev.pointerId);
+      safePointerCapture(svg, ev);
       feedback("pushing edge " + idx + " (release to settle)");
     });
   l.addEventListener("click", ev => {
@@ -712,6 +712,16 @@ function renderSnapFx(snap){
   const fx = svg.querySelector("#snapfx");
   if (fx) fx.innerHTML = parts;
 }
+function safePointerCapture(el, ev){
+  try { el.setPointerCapture(ev.pointerId); } catch(_){}
+}
+// pointercancel / lost capture: never leave drag state dangling,
+// or a later click resumes a STALE grip and mayhem ensues
+function clearDragState(){
+  vertexDrag = null; edgeDrag = null;
+  renderSnapFx(null);
+}
+
 // ── tools ──────────────────────────────────────────────────────────────
 function setTool(next){
   tool = next;
@@ -1130,6 +1140,8 @@ svg.addEventListener("click", ev => {
       const pr = projectOnSeg(pt, seg);
       if (pr && pr.dist < ed){ selEdge = idx; ed = pr.dist; }
     });
+    let selFace = currentFaces().find(f =>
+      pointInPoly(pt, f.verts));
     // ── explicit edit sub-mode: selection type is WHAT YOU SUB-MODE-PICKED,
     // not inferred from what happens to be under the cursor (Blender-style 1/2/3)
     if (editMode === "edge"){
@@ -1139,8 +1151,6 @@ svg.addEventListener("click", ev => {
     } else {
       selEdge = null; selFace = null;       // vertex mode sees only vertices
     }
-    let selFace = currentFaces().find(f =>
-      pointInPoly(pt, f.verts));
     if (selJoint){
       selection = { type: "joint", pt: selJoint.slice(), segs: [...(svg._joints ? svg._joints.get(selJoint.join(",")) ? [] : [] : [])] };
       // find joints key
@@ -1208,6 +1218,8 @@ svg.addEventListener("click", ev => {
   if (tool === "draw") chainAt(ev);
 });
 svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
+svg.addEventListener("pointercancel", clearDragState);
+svg.addEventListener("lostpointercapture", ev => { if (!edgeDrag) clearDragState(); });
 
 // ── tolerant edit-mode vertex drag (root handler, survives narrow dots) ─
 svg.addEventListener("pointerdown", ev => {
@@ -1233,7 +1245,7 @@ svg.addEventListener("pointerdown", ev => {
     (selection.segs.length || 0) + " strokes";
   document.getElementById("edgeActions").style.display = "none";
   document.getElementById("vtxActions").style.display = "block";
-  svg.setPointerCapture(ev.pointerId);
+  safePointerCapture(svg, ev);
   draw();
   feedback("dragging vertex [" + joint.map(fmt).join(", ") + "]");
 }, true);
