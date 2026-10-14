@@ -160,7 +160,7 @@ function draw(){
   let parts = [];
   parts.push(`<rect class="envelope" x="${ex0}" y="${ey1}" width="${ex}" height="${ey}"/>`);
   // face fills (server noding result)
-  for (const f of (draft.faces || [])){
+  for (const f of (draft._faces || [])){
     if (!f.verts || !f.verts.length) continue;
     const pts = f.verts.map(v => m2vb(v[0], v[1]).map(n => fmt(n)).join(",")).join(" ");
     parts.push(`<polygon class="face-fill" data-cx="${f.centroid[0]}" data-cy="${f.centroid[1]}" points="${pts}"
