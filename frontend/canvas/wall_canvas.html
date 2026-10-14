@@ -420,70 +420,88 @@ function projectOnSeg(m, s){
 }
 // one snap decision for a cursor point m (metres)
 // prev: the running chain vertex (perpendicular/ortho reference), may be null
-function snapPoint(m, prev, tolM){
-  // 1. existing joint (and on-wall/segment midpoints after it)
-  const j = nearestJoint(m, tolM);
-  if (j) return { m: j.slice(), kind: "joint", ref: j };
-  // 2. point on an existing wall (cursor riding a drawn line)
-  let bestSeg = null;
-  for (const s of draft.segments){
-    const pr = projectOnSeg(m, s);
-    if (pr && pr.dist < tolM && (!bestSeg || pr.dist < bestSeg.dist)) bestSeg = { s, pr };
+// ── snap candidates: collect every plausible target, rank joint > wall >
+//    grid > perp > ortho > diag > free. within a tier, nearer wins. Tab
+//    cycles the candidates so the dense-drawing "it snapped to the wrong one"
+//    is recoverable without releasing the button.
+function gatherSnapCandidates(m, prev, tolM){
+  const cands = [], seenPts = new Set();
+  const add = (c) => {
+    const k = c.m.map(v => Number(v)).map(v => v.toFixed(6)).join(",");
+    if (seenPts.has(k)) return;
+    seenPts.add(k); cands.push(c);
+  };
+  // 1. joints already on the drawing
+  for (const p of allJoints()){
+    const d = Math.hypot(p[0] - m[0], p[1] - m[1]);
+    if (d <= tolM) add({ m: [p[0], p[1]], kind: "joint", ref: p, dist: d, tier: 0 });
   }
-  if (bestSeg) return { m: bestSeg.pr.pt.slice(), kind: "onseg", ref: bestSeg.s };
-  // 2b. grid lines: the cursor rides a helper line (bind on commit)
-  for (let hl of helperLines()){
-    const dAxis = Math.abs(m[0] - hl.pos);
-    const dAxis2 = Math.abs(m[1] - hl.pos);
-    const dv = hl.axis === "vertical" ? dAxis : dAxis2;
-    if (dv < tolM){
-      const snapped = hl.axis === "vertical" ? [hl.pos, m[1]] : [m[0], hl.pos];
-      return { m: snapped, kind: "grid", ref: hl };
-    }
+  // 2. on-wall snapping (riding a drawn stroke)
+  for (const seg of draft.segments){
+    const pr = projectOnSeg(m, seg);
+    if (pr && pr.dist <= tolM) add({ m: pr.pt.slice(), kind: "onseg", ref: seg, dist: pr.dist, tier: 1 });
   }
-  if (!prev) return { m, kind: "free" };
-  // 3. perpendicular lock (angular): if the segment about to be drawn is
-  //    within ~4 degrees of perpendicular to ANY drawn wall, snap the
-  //    cursor onto the exact perpendicular direction from prev. Fires
-  //    anywhere along the ray (not just beside prev), which is how CAD
-  //    ortho tracking behaves.
-  {
-    const vx = m[0] - prev[0], vy = m[1] - prev[1];
-    const vlen = Math.hypot(vx, vy);
+  // 2b. helper grid lines
+  for (const hl of helperLines()){
+    const dv = hl.axis === "vertical" ? Math.abs(m[0] - hl.pos) : Math.abs(m[1] - hl.pos);
+    if (dv <= tolM)
+      add({ m: hl.axis === "vertical" ? [hl.pos, m[1]] : [m[0], hl.pos],
+            kind: "grid", ref: hl, dist: dv, tier: 2 });
+  }
+  if (prev){
+    // 3. perpendicular lock — one candidate per wall that is (near-)orthogonal
+    const vx = m[0] - prev[0], vy = m[1] - prev[1], vlen = Math.hypot(vx, vy);
     if (vlen > 0.1){
-      let best = null;
       for (const s of draft.segments){
         const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
         if (len < 1e-9) continue;
-        const ux = dx/len, uy = dy/len;
-        const nDot = Math.abs((vx*ux + vy*uy) / vlen);  // |cos(angle)| vs the wall
-        if (nDot < 0.07 && (!best || nDot < best.nDot)){
-          let px = uy, py = -ux;                        // unit perpendicular
-          if (vx*px + vy*py < 0){ px = -uy; py = ux; }  // aim at the cursor side
-          best = { s, px, py, nDot };
+        const nDot = Math.abs((vx*(dx/len) + vy*(dy/len)) / vlen);
+        if (nDot < 0.07){
+          let px = dy/len, py = -dx/len;
+          if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
+          const locked = [fmt(prev[0] + vlen*px), fmt(prev[1] + vlen*py)];
+          add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
+               dist: Math.hypot(locked[0]-m[0], locked[1]-m[1]), tier: 3 });
         }
       }
-      if (best){
-        const t = vlen;  // keep the cursor's distance, lock the direction
-        return {
-          m: [fmt(prev[0] + t*best.px), fmt(prev[1] + t*best.py)],
-          kind: "perp", ref: [best.s, [prev[0], prev[1], best.px, best.py]],
-        };
-      }
+    }
+    // 4. ortho (axis-locked from prev)
+    if (Math.abs(m[1] - prev[1]) <= tolM)
+      add({ m: [fmt(m[0]), fmt(prev[1])], kind: "ortho", ref: null,
+            dist: Math.abs(m[1]-prev[1]), tier: 4 });
+    if (Math.abs(m[0] - prev[0]) <= tolM)
+      add({ m: [fmt(prev[0]), fmt(m[1])], kind: "ortho", ref: null,
+            dist: Math.abs(m[0]-prev[0]), tier: 4 });
+    // 5. 45-degree diagonal
+    if (Math.abs(Math.abs(m[0]-prev[0]) - Math.abs(m[1]-prev[1])) < tolM){
+      const d = Math.max(Math.abs(m[0]-prev[0]), Math.abs(m[1]-prev[1]));
+      const sx = m[0] >= prev[0] ? 1 : -1, sy = m[1] >= prev[1] ? 1 : -1;
+      const pt = [fmt(prev[0]+d*sx), fmt(prev[1]+d*sy)];
+      add({ m: pt, kind: "diag", ref: null,
+            dist: Math.hypot(pt[0]-m[0], pt[1]-m[1]), tier: 5 });
     }
   }
-  // 4. ortho: axis-aligned from prev
-  if (Math.abs(m[1] - prev[1]) < tolM) return { m: [fmt(m[0]), fmt(prev[1])], kind: "ortho", ref: null };
-  if (Math.abs(m[0] - prev[0]) < tolM) return { m: [fmt(prev[0]), fmt(m[1])], kind: "ortho", ref: null };
-  // 5. 45-degree diagonal from prev
-  if (Math.abs(Math.abs(m[0]-prev[0]) - Math.abs(m[1]-prev[1])) < tolM){
-    const d = Math.max(Math.abs(m[0]-prev[0]), Math.abs(m[1]-prev[1]));
-    const sx = m[0] >= prev[0] ? 1 : -1, sy = m[1] >= prev[1] ? 1 : -1;
-    return { m: [fmt(prev[0] + d*sx), fmt(prev[1] + d*sy)], kind: "diag", ref: null };
-  }
-  return { m, kind: "free" };
+  // always: the raw cursor itself
+  add({ m: [fmt(m[0]), fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 });
+  cands.sort((a,b) => a.tier - b.tier || a.dist - b.dist);
+  return cands;
 }
-let curSnap = { m: null, kind: "free", ref: null };   // shared draw state
+function snapPoint(m, prev, tolM, forceIdx){
+  const cands = gatherSnapCandidates(m, prev, tolM);
+  snapCandidates = cands;
+  let idx = 0;
+  if (forceIdx == null) snapActiveIdx = 0;
+  else snapActiveIdx = Math.max(0, Math.min(cands.length-1, forceIdx));
+  idx = snapActiveIdx;
+  const base = cands.length ? cands[idx] : { m: [fmt(m[0]),fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 };
+  const out = { m: base.m.slice(), kind: base.kind, ref: base.ref,
+                candCount: cands.length || 1, candIdx: idx };
+  return out;
+}
+
+let curSnap = { m: null, kind: "free", ref: null, candCount: 0, candIdx: 0 };   // shared draw state
+let snapCandidates = [], snapActiveIdx = 0, lastRawMForSnap = null,
+    lastPrevForSnap = null, lastTolMForSnap = 0.1;
 function renderSnapFx(snap){
   let parts = "";
   if (snap && snap.kind === "joint" && snap.ref)
@@ -515,6 +533,11 @@ function renderSnapFx(snap){
     const [bx, by] = m2vb(snap.m[0], snap.m[1]);
     parts += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#f97316"
       stroke-width="1.5" stroke-dasharray="4 3" opacity="0.9"/>`;
+  }
+  if (curSnap && curSnap.candCount > 1){
+    const c = curSnap.candCount, i = (curSnap.candIdx || 0) + 1;
+    const [tx, ty] = m2vb(curSnap.m[0], curSnap.m[1]);
+    parts += `<text x="${tx + 8}" y="${ty - 8}" font-size="10" font-weight="600" fill="#1d4ed8">${i}/${c} ${curSnap.kind || ""} · tab cycles</text>`;
   }
   const fx = svg.querySelector("#snapfx");
   if (fx) fx.innerHTML = parts;
@@ -790,7 +813,11 @@ svg.addEventListener("pointermove", ev => {
     if (tool === "draw"){
       const raw = meters(ev, false);
       const tolM = 11 / layout().s;   // ~11 px on screen
-      curSnap = snapPoint(raw, chain ? chain.last : null, tolM);
+      lastRawMForSnap = raw;
+      lastPrevForSnap = chain ? chain.last.slice() : null;
+      lastTolMForSnap = tolM;
+      snapActiveIdx = 0;
+      curSnap = snapPoint(raw, chain ? chain.last : null, tolM, 0);
       const m = curSnap.m;
       const [mx, my] = m2vb(m[0], m[1]);
       const rb = document.getElementById("rubber");
@@ -1099,6 +1126,15 @@ document.getElementById("btnGate").addEventListener("click", gateDraft);
 [fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding(); refreshHelperList();
 if (demo) solveDraft(); }));
 window.addEventListener("resize", () => draw());
+window.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && chain){ endChain(); ev.preventDefault(); return; }
+  if (ev.key !== "Tab" || tool !== "draw") return;
+  ev.preventDefault();
+  if (!lastRawMForSnap || !chain) return;
+  snapActiveIdx = snapCandidates.length ? (snapActiveIdx + (ev.shiftKey ? -1 : 1) + snapCandidates.length) % snapCandidates.length : 0;
+  curSnap = snapPoint(lastRawMForSnap, lastPrevForSnap, lastTolMForSnap, snapActiveIdx);
+  renderSnapFx(curSnap);
+});
 
 const demo = new URLSearchParams(location.search).has("demo");
 if (demo){
