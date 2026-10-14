@@ -212,7 +212,23 @@ function pointerView(ev){
   if (!svg.getScreenCTM()) return { x: 0, y: 0 };
   return p.matrixTransform(svg.getScreenCTM().inverse());
 }
-function withFrame(fn){ if (!rafOn) rafOn = requestAnimationFrame(() => { rafOn = 0; fn(); }); }
+function withFrame(fn){
+  if (rafOn) return;                       // one frame in flight (coalesce)
+  const id = requestAnimationFrame(() => {
+    rafOn = 0;
+    try { fn(); } catch(e){ console.warn("frame", e); }
+  });
+  rafOn = id;
+  // fail-safe: if the frame never arrives (throttled tab, headless, rAF paused),
+  // run the body once anyway — otherwise every drag response is silently dropped
+  setTimeout(() => {
+    if (rafOn === id){
+      rafOn = 0;
+      try { cancelAnimationFrame(id); } catch(_){}
+      try { fn(); } catch(e){ console.warn("frameFailsafe", e); }
+    }
+  }, 60);
+}
 
 function setVB(){
   svg.setAttribute("viewBox", `0 0 ${VB.w} ${VB.h}`);
@@ -987,7 +1003,7 @@ function meters(ev, snapLoose){
 
 // ── point events ───────────────────────────────────────────────────────
 svg.addEventListener("pointermove", ev => {
-  withFrame(() => {
+  {
     if (tool === "draw"){
       const raw = meters(ev, false);
       const tolM = 11 / layout().s;   // ~11 px on screen
@@ -1022,7 +1038,7 @@ svg.addEventListener("pointermove", ev => {
       renderSnapFx(null);
       curSnap = { m: null, kind: "free", ref: null };
     }
-  });
+  }
 });
 svg.addEventListener("pointermove", ev => {
   if ((tool === "vertex" || tool === "edit") && vertexDrag){
@@ -1071,6 +1087,7 @@ svg.addEventListener("pointermove", ev => {
 });
 svg.addEventListener("pointerup", ev => {
   if ((tool === "vertex" || tool === "edit") && vertexDrag){
+
     // drop bindings the moved joint no longer satisfies
     const o = vertexDrag.orig;
     draft.bindings = (draft.bindings || []).filter(b => {
@@ -1505,5 +1522,9 @@ if (demo){
   solveDraft().then(gateDraft);
 }
 </script>
+
+
+
+
 </body>
 </html>
