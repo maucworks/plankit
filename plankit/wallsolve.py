@@ -32,7 +32,7 @@ rejected: the sketch must split strokes explicitly at every crossing
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ortools.sat.python import cp_model
 
@@ -104,13 +104,25 @@ def _face_loops(
 
 
 def solve_areas(
-    draft: WallGraphDraft, seconds: float = SOLVE_SECONDS
+    draft: WallGraphDraft,
+    seconds: float = SOLVE_SECONDS,
+    hints: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Rubber-band the drawing so every face area lands in its band.
 
+    ``hints`` (interactive mode) warm-start the search: a list of
+    ``{"orig": [x, y], "solved": [x, y]}`` from the previous solution —
+    the next solve starts from the last feasible sketch instead of
+    reset search, which is what makes solve-per-drag affordable. Note
+    the certificate semantics stay with the exact post-check; a small
+    ``seconds`` budget makes the *interactive* result advisory
+    (best-found), while the full-budget button solve is the certified
+    one.
+
     Returns a report dict: status (``solved``/``infeasible``/``budget``/
     ``rejected``), recomputed faces (exact shoelace areas per solved
-    coordinates), junction moves, wall time. Deterministic.
+    coordinates), junction moves, wall time. Deterministic for a fixed
+    budget.
     """
     t0 = time.time()
     ortho_errors = _validate_orthogonal(draft)
@@ -183,7 +195,6 @@ def solve_areas(
     move_terms: List[Any] = []
     bindings = list(draft.bindings or [])
     assumption_lits: List[Tuple[Any, str]] = []  # (literal, human-readable)
-    bound_axis: Dict[Tuple[int, int], Tuple[Any, str]] = {}
     for key in sorted(jmap):
         ox, oy = jmap[key]
         binding = next(
@@ -213,6 +224,10 @@ def solve_areas(
         absy[key] = m.NewIntVar(0, int(DISP_M * 10), f"dy{key}")
         m.AddAbsEquality(absx[key], X[key] - _dm(ox))
         m.AddAbsEquality(absy[key], Y[key] - _dm(oy))
+        # least-L1 objective: every movable junction pays for its
+        # displacement, so the solve settles as close to the drawn
+        # sketch as the area bands allow
+        move_terms.extend([absx[key], absy[key]])
         if binding:
             # helper-grid binding: the junction's line-axis coordinate
             # equals the line position (vertical line pins X, horizontal
@@ -281,6 +296,22 @@ def solve_areas(
 
     if assumption_lits:
         m.AddAssumptions([lit for lit, _ in assumption_lits])
+
+    # interactive warm start: previous solved coordinates as hints
+    hint_pairs: Dict[Tuple[int, int], Tuple[float, float]] = {}
+    for h in hints or []:
+        try:
+            hint_pairs[(_dm(h["orig"][0]), _dm(h["orig"][1]))] = (
+                float(h["solved"][0]),
+                float(h["solved"][1]),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    for key, (sx_, sy_) in sorted(hint_pairs.items()):
+        if key in X:
+            m.AddHint(X[key], _dm(sx_))
+        if key in Y:
+            m.AddHint(Y[key], _dm(sy_))
 
     solver = cp_model.CpSolver()
     solver.parameters.num_workers = 1

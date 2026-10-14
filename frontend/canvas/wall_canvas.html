@@ -641,6 +641,7 @@ svg.addEventListener("pointermove", ev => {
         }
       });
       draw();
+      runLiveSolve();                                // walls ride the constraints live
     });
   }
 });
@@ -660,7 +661,8 @@ svg.addEventListener("pointerup", ev => {
     });
     vertexDrag = null;
     draw(); noding();
-    feedback("joint moved — re-noding.");
+    flushLiveSolve();   // settle the dragged solution immediately
+    feedback("joint moved — live solution refreshed.");
   }
 });
 svg.addEventListener("click", ev => {
@@ -687,6 +689,49 @@ svg.addEventListener("click", ev => {
   if (tool === "draw") chainAt(ev);
 });
 svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
+
+// ── interactive drag re-solve ─────────────────────────────────────────
+let liveSeq = 0;
+function solvedHints(){
+  const solved = draft._solved;
+  if (!solved || !solved.junctions) return null;
+  return solved.junctions.map(j => ({ orig: j.orig, solved: j.solved }));
+}
+// one request in flight, one timer slot: drag frames coalesce into a
+// trailing solve at most 140 ms apart, pointerup flushes immediately,
+// and only the newest response is painted (seq guard)
+const liveState = { busy: false, last: 0, timer: 0 };
+function scheduleLive(force){
+  if (liveState.timer){ clearTimeout(liveState.timer); liveState.timer = 0; }
+  const delay = force ? 0 : Math.max(0, liveState.last + 140 - performance.now());
+  liveState.timer = setTimeout(() => {
+    liveState.timer = 0;
+    liveSolve();
+  }, delay);
+}
+async function liveSolve(){
+  if (liveState.busy){ scheduleLive(true); return; }   // retry after the flight
+  const seq = ++liveSeq;
+  liveState.busy = true;
+  liveState.last = performance.now();
+  readDraft();
+  try {
+    const r = await fetch(API + "/templates/graph/solve", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft, hints: solvedHints(), budget: 0.3 }),
+    });
+    const j = await r.json();
+    if (seq !== liveSeq) return;                    // stale response
+    if (j.junctions && (j.status === "solved" || j.status === "budget")){
+      draft._solved = { junctions: j.junctions, faces: j.faces };
+      draw();                                       // blue-dashed live ghost
+    }
+  } finally {
+    liveState.busy = false;
+  }
+}
+function runLiveSolve(){ if (tool === "vertex") scheduleLive(false); }
+function flushLiveSolve(){ if (tool === "vertex") scheduleLive(true); }
 
 // ── noding + tags ──────────────────────────────────────────────────────
 async function noding(){

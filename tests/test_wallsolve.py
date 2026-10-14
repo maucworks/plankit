@@ -114,3 +114,35 @@ def test_untagged_face_only_needs_floor():
     assert out["status"] == "solved"
     living = next(f for f in out["faces"] if f["band"] != [305.0, 315.0])
     assert living["ok"] is True and living["area"] >= 0.5
+
+
+def test_hints_warm_start_without_changing_the_certificate():
+    """Interactive mode: the previous solution arrives as CP-SAT hints.
+
+    A warm start changes only where the search begins, never the answer:
+    a hinted solve must return exactly the unhinted optimum, and repeat
+    identically (the canvas fires one of these per drag frame).
+    """
+    draft = WallGraphDraft.from_dict(_draft())
+    unhinted = solve_areas(draft, 10.0)
+    # a plausible previous solution: the divider 20 cm below the optimum
+    hints = [
+        {"orig": [0.0, 10.0], "solved": [0.0, 9.7]},
+        {"orig": [40.0, 10.0], "solved": [40.0, 9.7]},
+    ]
+    first = solve_areas(draft, 10.0, hints=hints)
+    second = solve_areas(draft, 10.0, hints=hints)
+    assert first["status"] == "solved"
+    assert first["junctions"] == unhinted["junctions"] == second["junctions"]
+    assert first["faces"] == unhinted["faces"]
+
+
+def test_hints_ignored_for_unknown_junctions():
+    """A stale hint (a junction that no longer exists) must not crash."""
+    draft = WallGraphDraft.from_dict(_draft())
+    out = solve_areas(
+        draft,
+        10.0,
+        hints=[{"orig": [99.0, 99.0], "solved": [1.0, 1.0]}, {"bogus": 1}],
+    )
+    assert out["status"] == "solved"

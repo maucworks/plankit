@@ -39,6 +39,11 @@ class ValidateRequest(DraftRequest):
     program: dict | None = None
 
 
+class SolveRequest(DraftRequest):
+    hints: list[dict] | None = None
+    budget: float | None = None
+
+
 class ReviseRequest(BaseModel):
     proposal: dict | None = None
     label: str | None = None
@@ -221,11 +226,17 @@ def create_app(
         return Response(draft_preview_svg(d), media_type="image/svg+xml")
 
     @app.post("/templates/graph/solve")
-    def wallgraph_solve(req: DraftRequest):
-        """Rubber-band solve: junction coordinates so face areas hit their bands."""
+    def wallgraph_solve(req: SolveRequest):
+        """Rubber-band solve: junction coordinates so face areas hit their bands.
+
+        Optional ``hints`` (previous solution) + ``budget`` (seconds) power
+        the interactive drag re-solve; budget-less calls keep the full
+        certified budget.
+        """
         d = WallGraphDraft.from_dict(req.draft)
+        budget = req.budget if req.budget and req.budget > 0 else None
         try:
-            return solve_areas(d)
+            return solve_areas(d, seconds=budget or 15.0, hints=req.hints or None)
         except Exception as exc:  # malformed draft, ortools hiccup
             raise HTTPException(status_code=503, detail=f"solve failed: {exc}") from exc
 
