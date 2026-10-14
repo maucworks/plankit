@@ -197,3 +197,39 @@ def test_zone_draft_not_visible_as_wallgraph(client):
     )
     assert client.get("/templates/graph/drafts").json() == []
     assert client.get("/templates/graph/drafts/zonedraft").status_code == 404
+
+
+# ── rooms with other than four edges ──────────────────────────────────
+
+
+def _envelope():
+    return [
+        {"x0": 0, "y0": 0, "x1": 30, "y1": 0},
+        {"x0": 30, "y0": 0, "x1": 30, "y1": 20},
+        {"x0": 30, "y0": 20, "x1": 0, "y1": 20},
+        {"x0": 0, "y0": 20, "x1": 0, "y1": 0},
+    ]
+
+
+def test_triangle_face_counts_as_a_room():
+    """Envelope + one diagonal stroke: the leftover face is a TRIANGLE
+    (3 corners) and noding still reports it as a room."""
+    d = _draft()
+    d["segments"] = _envelope() + [{"x0": 0, "y0": 20, "x1": 30, "y1": 0}]
+    faces = WallGraphDraft.from_dict(d).noded_faces()
+    assert any(len(f["verts"]) == 3 for f in faces), faces
+    assert abs(sum(f["area"] for f in faces) - 30 * 20) < 0.01
+
+
+def test_nested_room_gives_L_shaped_remainder():
+    """Quad + nested room in a corner → small room + L-shaped remainder
+    (6 edges); both are faces, areas tile exactly."""
+    d = _draft()
+    d["segments"] = _envelope() + [
+        {"x0": 0, "y0": 12, "x1": 12, "y1": 12},
+        {"x0": 12, "y0": 12, "x1": 12, "y1": 20},
+    ]
+    faces = WallGraphDraft.from_dict(d).noded_faces()
+    assert len(faces) == 2
+    assert any(len(f["verts"]) == 6 for f in faces)  # the L remainder
+    assert abs(sum(f["area"] for f in faces) - 30 * 20) < 0.01

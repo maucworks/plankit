@@ -71,7 +71,7 @@
       <button class="tool" data-tool="sel"    title="idle">✥ idle</button>
       <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
     </div>
-    <div class="hint" id="drawHint">draw: click = vertex, the chain continues, double-click ends it. snapping: green ring = existing point, green wall = riding a line, orange guide = new line perpendicular to that wall, dashed from last point = axis/45°. split: click on a line splits it. face: click a region to tag it as a room.</div>
+    <div class="hint" id="drawHint">draw: click = vertex, the chain continues, double-click ends it. snapping: green ring = existing point, green wall = riding a line, orange guide = draw locked perpendicular to that wall (angular, fires anywhere on the ray), dashed from last point = axis/45°. split: click on a line splits it. face: click a region to tag it as a room.</div>
     <svg id="c" width="100%"></svg>
   </div>
   <div id="panel">
@@ -88,6 +88,8 @@
     <label>key <input id="fKey" placeholder="living"></label>
     <label>display label <input id="fLbl" placeholder="living"></label>
     <label>items (fnmatch, comma) <input id="fItems" placeholder="slaap.*, B*-woon"></label>
+    <label>region colour <input id="fColor" type="color" value="#9fc6e8" disabled>
+      <input id="fColorUse" type="checkbox" disabled> use this colour</label>
     <div class="row">
       <label>area min (m²) <input id="fAmin" type="number" step="0.5"></label>
       <label>area max (m²) <input id="fAmax" type="number" step="0.5"></label>
@@ -166,12 +168,18 @@ function draw(){
   const ex = (draft.envelope.x1 - draft.envelope.x0) * L.s, ey = (draft.envelope.y1 - draft.envelope.y0) * L.s;
   let parts = [];
   parts.push(`<rect class="envelope" x="${ex0}" y="${ey1}" width="${ex}" height="${ey}"/>`);
-  // face fills (server noding result)
+  // face fills (server noding result). Each region gets a white inpaint
+  // ring (the stroke covers `ring px` inward) so the drawn wall keeps its
+  // thickness and overlapping regions would show as color crossing it.
+  const PALETTE = ["#9fc6e8", "#b6d7a8", "#f9cb9c", "#d5a6bd", "#b4a7d6", "#a2c4c9", "#ffc9de"];
   for (const f of (draft._faces || [])){
     if (!f.verts || !f.verts.length) continue;
     const pts = f.verts.map(v => m2vb(v[0], v[1]).map(n => fmt(n)).join(",")).join(" ");
+    const own = (f.color && f.color !== "auto") ? f.color
+      : PALETTE[(f.label || f.key || "?").split("").reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTE.length];
     parts.push(`<polygon class="face-fill" data-cx="${f.centroid[0]}" data-cy="${f.centroid[1]}" points="${pts}"
-      fill="#bcd7ee" fill-opacity="${f.label ? 0.55 : 0.3}"/>`);
+      fill="${own}" fill-opacity="${f.label ? 0.55 : 0.3}"
+      stroke="#ffffff" stroke-width="8"/>`);
     const [tx, ty] = m2vb(f.centroid[0], f.centroid[1]);
     parts.push(`<text class="facelabel" x="${tx}" y="${ty}" text-anchor="middle">${(f.label ? f.label + " · " : "")}${fmt(f.area)} m2</text>`);
   }
@@ -266,6 +274,9 @@ function bindLayer(){
         fItems.value = (pendingTag.items || []).join(", ");
         fAmin.value = pendingTag.area_min ?? "";
         fAmax.value = pendingTag.area_max ?? "";
+        fColor.value = pendingTag.color && pendingTag.color !== "auto" ? pendingTag.color : "#9fc6e8";
+        fColorUse.checked = Boolean(pendingTag.color && pendingTag.color !== "auto");
+        fColor.disabled = false; fColorUse.disabled = false;
         document.getElementById("regionInfo").textContent =
           `index ${pendingTag.index} · ${fmt(pendingTag.area)} m² · centroid ${pendingTag.centroid}`;
         feedback("region picked — fill key/label/items/area band and Apply.");
@@ -321,30 +332,44 @@ function snapPoint(m, prev, tolM){
   }
   if (bestSeg) return { m: bestSeg.pr.pt.slice(), kind: "onseg", ref: bestSeg.s };
   if (!prev) return { m, kind: "free" };
-  // 3. perpendicular to a nearby wall: the new segment would leave prev
-  //    perpendicular to that wall; snap onto the perpendicular line
-  if (Math.hypot(m[0]-prev[0], m[1]-prev[1]) > 0.1){
-    for (const s of draft.segments){
-      const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
-      if (len < 1e-9) continue;
-      const ux = dx/len, uy = dy/len;
-      // distance of m from the perpendicular line through prev = |(m-prev)·u|
-      const alongU = (m[0]-prev[0])*ux + (m[1]-prev[1])*uy;
-      if (Math.abs(alongU) > tolM) continue;
-      let nx = uy, ny = -ux;
-      const alongN = (m[0]-prev[0])*nx + (m[1]-prev[1])*ny;
-      const snapped = [fmt(prev[0] + alongN*nx), fmt(prev[1] + alongN*ny)];
-      return { m: snapped, kind: "perp", ref: [s, [prev[0], prev[1], nx, ny]] };
+  // 3. perpendicular lock (angular): if the segment about to be drawn is
+  //    within ~4 degrees of perpendicular to ANY drawn wall, snap the
+  //    cursor onto the exact perpendicular direction from prev. Fires
+  //    anywhere along the ray (not just beside prev), which is how CAD
+  //    ortho tracking behaves.
+  {
+    const vx = m[0] - prev[0], vy = m[1] - prev[1];
+    const vlen = Math.hypot(vx, vy);
+    if (vlen > 0.1){
+      let best = null;
+      for (const s of draft.segments){
+        const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
+        if (len < 1e-9) continue;
+        const ux = dx/len, uy = dy/len;
+        const nDot = Math.abs((vx*ux + vy*uy) / vlen);  // |cos(angle)| vs the wall
+        if (nDot < 0.07 && (!best || nDot < best.nDot)){
+          let px = uy, py = -ux;                        // unit perpendicular
+          if (vx*px + vy*py < 0){ px = -uy; py = ux; }  // aim at the cursor side
+          best = { s, px, py, nDot };
+        }
+      }
+      if (best){
+        const t = vlen;  // keep the cursor's distance, lock the direction
+        return {
+          m: [fmt(prev[0] + t*best.px), fmt(prev[1] + t*best.py)],
+          kind: "perp", ref: [best.s, [prev[0], prev[1], best.px, best.py]],
+        };
+      }
     }
-    // 4. ortho: axis-aligned from prev
-    if (Math.abs(m[1] - prev[1]) < tolM) return { m: [fmt(m[0]), fmt(prev[1])], kind: "ortho", ref: null };
-    if (Math.abs(m[0] - prev[0]) < tolM) return { m: [fmt(prev[0]), fmt(m[1])], kind: "ortho", ref: null };
-    // 5. 45-degree diagonal from prev
-    if (Math.abs(Math.abs(m[0]-prev[0]) - Math.abs(m[1]-prev[1])) < tolM){
-      const d = Math.max(Math.abs(m[0]-prev[0]), Math.abs(m[1]-prev[1]));
-      const sx = m[0] >= prev[0] ? 1 : -1, sy = m[1] >= prev[1] ? 1 : -1;
-      return { m: [fmt(prev[0] + d*sx), fmt(prev[1] + d*sy)], kind: "diag", ref: null };
-    }
+  }
+  // 4. ortho: axis-aligned from prev
+  if (Math.abs(m[1] - prev[1]) < tolM) return { m: [fmt(m[0]), fmt(prev[1])], kind: "ortho", ref: null };
+  if (Math.abs(m[0] - prev[0]) < tolM) return { m: [fmt(prev[0]), fmt(m[1])], kind: "ortho", ref: null };
+  // 5. 45-degree diagonal from prev
+  if (Math.abs(Math.abs(m[0]-prev[0]) - Math.abs(m[1]-prev[1])) < tolM){
+    const d = Math.max(Math.abs(m[0]-prev[0]), Math.abs(m[1]-prev[1]));
+    const sx = m[0] >= prev[0] ? 1 : -1, sy = m[1] >= prev[1] ? 1 : -1;
+    return { m: [fmt(prev[0] + d*sx), fmt(prev[1] + d*sy)], kind: "diag", ref: null };
   }
   return { m, kind: "free" };
 }
@@ -416,7 +441,15 @@ function chainAt(ev){
     feedback("chain started — the green ring = existing point, the orange guide = perpendicular to a wall."); return; }
   if (curSnap.kind === "joint" && curSnap.ref &&
       Math.abs(curSnap.ref[0] - chain.first[0]) < 1e-9 && Math.abs(curSnap.ref[1] - chain.first[1]) < 1e-9){
-    endChain(); return;  // closed by clicking the first joint again
+    // closed by clicking the first joint again: push the closing stroke
+    // to the EXACT first point (triangles and ngons close like quads)
+    const gap = Math.hypot(chain.last[0] - chain.first[0], chain.last[1] - chain.first[1]);
+    if (gap >= 0.05){
+      draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: chain.first[0], y1: chain.first[1] });
+    }
+    endChain();
+    feedback("chain closed — " + draft.segments.length + " segments, noding…");
+    return;
   }
   if (Math.hypot(base[0] - chain.last[0], base[1] - chain.last[1]) < 0.1) return;
   draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: base[0], y1: base[1] });
@@ -542,6 +575,7 @@ document.getElementById("btnTag").addEventListener("click", () => {
     items: fItems.value.split(",").map(s => s.trim()).filter(Boolean),
     area_min: fAmin.value === "" ? null : Number(fAmin.value),
     area_max: fAmax.value === "" ? null : Number(fAmax.value),
+    color: fColorUse.checked ? fColor.value : null,
     centroid: pendingTag.centroid,
   };
   draft.faces = draft.faces.filter(f =>

@@ -131,6 +131,35 @@ def solve_areas(
 
     ex, ey = draft.envelope.x1, draft.envelope.y1
 
+    # -- helper grid lines: parallel-with-offset to the master (hard). --
+    # master = axis + drawn position (fixed constant); each derived line
+    # = parallel-with-offset: line coordinate = master pos + offset.
+    # Bindings tie drawn junctions (by drawn dm-coordinate) onto a line:
+    # the junction's line-axis coordinate equals the line position.
+    helpers = draft.helpers or {}
+    master = helpers.get("master")
+    line_pos: Dict[str, int] = {}
+    helper_errors: List[str] = []
+    if master:
+        mpos = master.get("pos", 0.0)
+        for ln in helpers.get("lines", []):
+            off = ln.get("offset")
+            if not isinstance(off, (int, float)) or not isinstance(mpos, (int, float)):
+                helper_errors.append(f"helper:{ln.get('id', '?')}:missing-offset")
+                continue
+            pos_dm = _dm(mpos + float(off))
+            inside = (
+                0 <= pos_dm <= _dm(ex)
+                if master.get("axis") == "vertical"
+                else 0 <= pos_dm <= _dm(ey)
+            )
+            if not inside:
+                helper_errors.append(f"helper:{ln.get('id', '?')}:outside-envelope")
+                continue
+            line_pos[str(ln.get("id"))] = pos_dm
+    if helper_errors:
+        return {"status": "rejected", "errors": helper_errors}
+
     # anchored junctions: every incident *drawn* stroke is facade-tagged
     # (building-outline corners) — those may not move. A junction that a
     # facade stroke merely *passes through* is not drawn on that stroke,
@@ -152,8 +181,20 @@ def solve_areas(
     absx: Dict[Tuple[int, int], Any] = {}
     absy: Dict[Tuple[int, int], Any] = {}
     move_terms: List[Any] = []
+    bindings = list(draft.bindings or [])
+    assumption_lits: List[Tuple[Any, str]] = []  # (literal, human-readable)
+    bound_axis: Dict[Tuple[int, int], Tuple[Any, str]] = {}
     for key in sorted(jmap):
         ox, oy = jmap[key]
+        binding = next(
+            (
+                b
+                for b in bindings
+                if b.get("line") in line_pos
+                and (_dm(b["junction"]["x"]), _dm(b["junction"]["y"])) == key
+            ),
+            None,
+        )
         if key in anchored:
             X[key] = m.NewIntVar(_dm(ox), _dm(ox), f"x{key}")
             Y[key] = m.NewIntVar(_dm(oy), _dm(oy), f"y{key}")
@@ -172,7 +213,24 @@ def solve_areas(
         absy[key] = m.NewIntVar(0, int(DISP_M * 10), f"dy{key}")
         m.AddAbsEquality(absx[key], X[key] - _dm(ox))
         m.AddAbsEquality(absy[key], Y[key] - _dm(oy))
-        move_terms += [absx[key], absy[key]]
+        if binding:
+            # helper-grid binding: the junction's line-axis coordinate
+            # equals the line position (vertical line pins X, horizontal
+            # pins Y); wrapped in an assumption literal so the UNSAT
+            # core can name the conflicting binding.
+            lv = line_pos[str(binding.get("line"))]
+            axis = (master or {}).get("axis")
+            lit = m.NewBoolVar(f"bind{key[1]}x{key[0]}_{binding.get('line')}")
+            assumption_lits.append(
+                (
+                    lit,
+                    f"junction ({jmap[key][0]:.1f},{jmap[key][1]:.1f}) on line '{binding.get('line')}'",
+                )
+            )
+            if axis == "vertical":
+                m.Add(X[key] == lv).OnlyEnforceIf(lit)
+            else:
+                m.Add(Y[key] == lv).OnlyEnforceIf(lit)
 
     # strokes keep their orientation class and their length window
     for i, s in enumerate(draft.segments):
@@ -221,11 +279,32 @@ def solve_areas(
     if move_terms:
         m.Minimize(sum(move_terms))
 
+    if assumption_lits:
+        m.AddAssumptions([lit for lit, _ in assumption_lits])
+
     solver = cp_model.CpSolver()
     solver.parameters.num_workers = 1
     solver.parameters.random_seed = 1
     solver.parameters.max_time_in_seconds = seconds
     status = solver.Solve(m)
+    if status == cp_model.INFEASIBLE and assumption_lits:
+        core = solver.SufficientAssumptionsForInfeasibility()
+        core = {v for v in solver.SufficientAssumptionsForInfeasibility()}
+        conflicts = [
+            label
+            for lit, label in assumption_lits
+            if lit.index in core  # lit.index is an int attribute in 9.15
+        ]
+        return {
+            "status": "infeasible",
+            "conflicts": conflicts,
+            "errors": [
+                "no coordinate assignment satisfies every tagged band/binding —"
+                " the minimal conflicting set follows"
+            ]
+            + conflicts,
+            "time": solver.WallTime(),
+        }
     if status == cp_model.INFEASIBLE:
         return {
             "status": "infeasible",

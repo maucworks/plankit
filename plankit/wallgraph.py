@@ -53,6 +53,10 @@ class WallGraphDraft:
     segments: List[Dict[str, float]] = field(default_factory=list)
     edges: Dict[int, str] = field(default_factory=dict)
     faces: List[Dict[str, Any]] = field(default_factory=list)
+    helpers: Dict[str, Any] = field(
+        default_factory=lambda: {"master": None, "lines": []}
+    )
+    bindings: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Serialise to a plain JSON-safe dict."""
@@ -65,6 +69,13 @@ class WallGraphDraft:
             "segments": [dict(s) for s in self.segments],
             "edges": {str(k): v for k, v in self.edges.items()},
             "faces": [dict(f) for f in self.faces],
+            "helpers": {
+                "master": dict(self.helpers.get("master"))
+                if self.helpers.get("master")
+                else None,
+                "lines": [dict(ln) for ln in self.helpers.get("lines", [])],
+            },
+            "bindings": [dict(b) for b in self.bindings],
         }
 
     @classmethod
@@ -85,6 +96,11 @@ class WallGraphDraft:
             ],
             edges={int(k): str(v) for k, v in data.get("edges", {}).items()},
             faces=[dict(f) for f in data.get("faces", [])],
+            helpers={
+                "master": (data.get("helpers") or {}).get("master"),
+                "lines": list((data.get("helpers") or {}).get("lines", [])),
+            },
+            bindings=[dict(b) for b in data.get("bindings", [])],
         )
 
     def validate(self) -> List[str]:
@@ -110,6 +126,25 @@ class WallGraphDraft:
         for i, kind in self.edges.items():
             if kind not in EDGE_KINDS and i < len(self.segments):
                 errors.append(f"edge:{i}:unknown-kind<{kind}>")
+        helpers = self.helpers or {}
+        master = helpers.get("master")
+        if master:
+            if master.get("axis") not in ("horizontal", "vertical"):
+                errors.append("helpers:master:unknown-axis")
+            pos = master.get("pos")
+            if not isinstance(pos, (int, float)) or not (
+                0 <= pos <= (ex if master.get("axis") == "vertical" else ey)
+            ):
+                errors.append("helpers:master:pos-outside-envelope")
+            module = master.get("module")
+            if not isinstance(module, (int, float)) or module <= 0:
+                errors.append("helpers:master:module-negative")
+        for ln in helpers.get("lines", []):
+            if ln.get("axis") not in ("horizontal", "vertical"):
+                errors.append("helpers:{}:unknown-axis".format(ln.get("id", "?")))
+        for b in self.bindings:
+            if b.get("line") not in [ln.get("id") for ln in helpers.get("lines", [])]:
+                errors.append("binding:{}:unknown-line".format(b.get("line")))
         for f in self.faces:
             if not f.get("key"):
                 errors.append("face::missing-key")
@@ -150,6 +185,7 @@ class WallGraphDraft:
                     "centroid": [round(cx, 3), round(cy, 3)],
                     "verts": [[round(v[0], 3), round(v[1], 3)] for v in verts],
                     "key": (tag or {}).get("key"),
+                    "color": (tag or {}).get("color"),
                     "label": (tag or {}).get("label", ""),
                     "items": (tag or {}).get("items", []),
                     "area_min": (tag or {}).get("area_min"),
@@ -195,7 +231,7 @@ def draft_preview_svg(draft: WallGraphDraft, faces: Optional[List[dict]] = None)
     fills = ["#bcd7ee", "#cfe3d4", "#ead9c2", "#e7d5e4", "#d9d9e8", "#e8e2c8"]
     for i, f in enumerate(faces):
         poly = " ".join(f"{sx(v[0]):.1f},{sy(v[1]):.1f}" for v in f["verts"])
-        fill = fills[i % len(fills)]
+        fill = f.get("color") or fills[i % len(fills)]
         tag = f.get("label") or ""
         parts.append(
             f'<polygon points="{poly}" fill="{fill}" fill-opacity="0.55" '
