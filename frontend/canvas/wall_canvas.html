@@ -71,7 +71,7 @@
       <button class="tool" data-tool="sel"    title="idle">✥ idle</button>
       <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
     </div>
-    <div class="hint" id="drawHint">draw: click = vertex, the chain continues, double-click ends it. split: click on a line kills it into two lines at the point. face: click a shaded region to tag it as a room (label, items, m²-band).</div>
+    <div class="hint" id="drawHint">draw: click = vertex, the chain continues, double-click ends it. snapping: green ring = existing point, green wall = riding a line, orange guide = new line perpendicular to that wall, dashed from last point = axis/45°. split: click on a line splits it. face: click a region to tag it as a room.</div>
     <svg id="c" width="100%"></svg>
   </div>
   <div id="panel">
@@ -190,6 +190,7 @@ function draw(){
     parts.push(`<circle class="vert" data-pt="${k}" data-segs="${idxList.join(",")}" cx="${fmt(vx)}" cy="${fmt(vy)}"/>`);
   }
   parts.push('<line id="rubber" class="rubber" style="display:none"/>');
+  parts.push('<g id="snapfx" pointer-events="none"></g>');
   svg.innerHTML = parts.join("");
   bindLayer();
 }
@@ -246,6 +247,104 @@ function currentFaces(){
   return draft._faces || [];
 }
 
+
+// ── snapping: point, on-wall, perpendicular, ortho (metres, pure math) ─
+function allJoints(){
+  const map = new Map();
+  draft.segments.forEach(s => {
+    for (const p of [[s.x0, s.y0], [s.x1, s.y1]]){
+      const k = p[0] + "," + p[1];
+      if (!map.has(k)) map.set(k, p);
+    }
+  });
+  return [...map.values()];
+}
+function nearestJoint(m, tolM){
+  let best = null, best_d = tolM;
+  for (const p of allJoints()){
+    const d = Math.hypot(p[0] - m[0], p[1] - m[1]);
+    if (d < best_d){ best = p; best_d = d; }
+  }
+  return best;  // null outside tolerance
+}
+function projectOnSeg(m, s){
+  // distance to the *segment* (clamped), plus the on-line projection point
+  const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+  const L2 = dx*dx + dy*dy;
+  if (L2 < 1e-12) return null;
+  const t = Math.max(0, Math.min(1, ((m[0]-s.x0)*dx + (m[1]-s.y0)*dy) / L2));
+  const px = s.x0 + t*dx, py = s.y0 + t*dy;
+  return { pt: [px, py], dist: Math.hypot(m[0]-px, m[1]-py) };
+}
+// one snap decision for a cursor point m (metres)
+// prev: the running chain vertex (perpendicular/ortho reference), may be null
+function snapPoint(m, prev, tolM){
+  // 1. existing joint (and on-wall/segment midpoints after it)
+  const j = nearestJoint(m, tolM);
+  if (j) return { m: j.slice(), kind: "joint", ref: j };
+  // 2. point on an existing wall (cursor riding a drawn line)
+  let bestSeg = null;
+  for (const s of draft.segments){
+    const pr = projectOnSeg(m, s);
+    if (pr && pr.dist < tolM && (!bestSeg || pr.dist < bestSeg.dist)) bestSeg = { s, pr };
+  }
+  if (bestSeg) return { m: bestSeg.pr.pt.slice(), kind: "onseg", ref: bestSeg.s };
+  if (!prev) return { m, kind: "free" };
+  // 3. perpendicular to a nearby wall: the new segment would leave prev
+  //    perpendicular to that wall; snap onto the perpendicular line
+  if (Math.hypot(m[0]-prev[0], m[1]-prev[1]) > 0.1){
+    for (const s of draft.segments){
+      const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
+      if (len < 1e-9) continue;
+      const ux = dx/len, uy = dy/len;
+      // distance of m from the perpendicular line through prev = |(m-prev)·u|
+      const alongU = (m[0]-prev[0])*ux + (m[1]-prev[1])*uy;
+      if (Math.abs(alongU) > tolM) continue;
+      let nx = uy, ny = -ux;
+      const alongN = (m[0]-prev[0])*nx + (m[1]-prev[1])*ny;
+      const snapped = [fmt(prev[0] + alongN*nx), fmt(prev[1] + alongN*ny)];
+      return { m: snapped, kind: "perp", ref: [s, [prev[0], prev[1], nx, ny]] };
+    }
+    // 4. ortho: axis-aligned from prev
+    if (Math.abs(m[1] - prev[1]) < tolM) return { m: [fmt(m[0]), fmt(prev[1])], kind: "ortho", ref: null };
+    if (Math.abs(m[0] - prev[0]) < tolM) return { m: [fmt(prev[0]), fmt(m[1])], kind: "ortho", ref: null };
+    // 5. 45-degree diagonal from prev
+    if (Math.abs(Math.abs(m[0]-prev[0]) - Math.abs(m[1]-prev[1])) < tolM){
+      const d = Math.max(Math.abs(m[0]-prev[0]), Math.abs(m[1]-prev[1]));
+      const sx = m[0] >= prev[0] ? 1 : -1, sy = m[1] >= prev[1] ? 1 : -1;
+      return { m: [fmt(prev[0] + d*sx), fmt(prev[1] + d*sy)], kind: "diag", ref: null };
+    }
+  }
+  return { m, kind: "free" };
+}
+let curSnap = { m: null, kind: "free", ref: null };   // shared draw state
+function renderSnapFx(snap){
+  let parts = "";
+  if (snap && snap.kind === "joint" && snap.ref)
+    parts += `<circle cx="${m2vb(snap.ref[0], snap.ref[1])[0]}" cy="${m2vb(snap.ref[0], snap.ref[1])[1]}"
+      r="7" fill="none" stroke="#059669" stroke-width="2.5"/>`;
+  if (snap && snap.kind === "onseg" && snap.ref){
+    const s = snap.ref;
+    parts += `<line x1="${m2vb(s.x0, s.y0)[0]}" y1="${m2vb(s.x0, s.y0)[1]}"
+      x2="${m2vb(s.x1, s.y1)[0]}" y2="${m2vb(s.x1, s.y1)[1]}" stroke="#059669"
+      stroke-width="4" opacity="0.35"/>`;
+  }
+  if (snap && snap.kind === "perp" && snap.ref){
+    const [sx, sy, nx, ny] = snap.ref[1];
+    const a = 60;
+    parts += `<line x1="${m2vb(sx - nx*a, sy - ny*a)[0]}" y1="${m2vb(sx - nx*a, sy - ny*a)[1]}"
+      x2="${m2vb(sx + nx*a, sy + ny*a)[0]}" y2="${m2vb(sx + nx*a, sy + ny*a)[1]}"
+      stroke="#f97316" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.9"/>`;
+  }
+  if (snap && (snap.kind === "ortho" || snap.kind === "diag") && chain){
+    const [ax, ay] = m2vb(chain.last[0], chain.last[1]);
+    const [bx, by] = m2vb(snap.m[0], snap.m[1]);
+    parts += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#f97316"
+      stroke-width="1.5" stroke-dasharray="4 3" opacity="0.9"/>`;
+  }
+  const fx = svg.querySelector("#snapfx");
+  if (fx) fx.innerHTML = parts;
+}
 // ── tools ──────────────────────────────────────────────────────────────
 function setTool(next){
   tool = next;
@@ -278,15 +377,19 @@ function endChain(){
 }
 document.getElementById("btnEnd").addEventListener("click", endChain);
 
-function chainAt(m){
-  if (!chain){ chain = { first: [m[0], m[1]], last: [m[0], m[1]] };
-    feedback("chain started — click the next vertices; click the first again closes, double-click or Esc ends."); return; }
-  if (Math.hypot(m[0] - chain.first[0], m[1] - chain.first[1]) < 0.35 && draft.segments.length){
-    endChain(); return;  // clicking the start point closes the chain
+function chainAt(ev){
+  const L = layout();
+  let base = meters(ev, false);
+  if (curSnap && curSnap.m) base = curSnap.m;         // the previewed snap is the truth
+  if (!chain){ chain = { first: [base[0], base[1]], last: [base[0], base[1]] };
+    feedback("chain started — the green ring = existing point, the orange guide = perpendicular to a wall."); return; }
+  if (curSnap.kind === "joint" && curSnap.ref &&
+      Math.abs(curSnap.ref[0] - chain.first[0]) < 1e-9 && Math.abs(curSnap.ref[1] - chain.first[1]) < 1e-9){
+    endChain(); return;  // closed by clicking the first joint again
   }
-  if (Math.hypot(m[0] - chain.last[0], m[1] - chain.last[1]) < 0.1) return;
-  draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: m[0], y1: m[1] });
-  chain.last = [m[0], m[1]];
+  if (Math.hypot(base[0] - chain.last[0], base[1] - chain.last[1]) < 0.1) return;
+  draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: base[0], y1: base[1] });
+  chain.last = [base[0], base[1]];
   draw(); noding();
 }
 
@@ -326,17 +429,23 @@ function meters(ev, snapLoose){
 // ── point events ───────────────────────────────────────────────────────
 svg.addEventListener("pointermove", ev => {
   withFrame(() => {
-    if (chain){
-      const p = pointerView(ev), L = layout();
-      const wx = draft.envelope.x0 + (p.x - L.ox) / L.s, wy = draft.envelope.y1 - (p.y - L.oy) / L.s;
+    if (tool === "draw"){
+      const raw = meters(ev, false);
+      const tolM = 11 / layout().s;   // ~11 px on screen
+      curSnap = snapPoint(raw, chain ? chain.last : null, tolM);
+      const m = curSnap.m;
+      const [mx, my] = m2vb(m[0], m[1]);
       const rb = document.getElementById("rubber");
-      if (rb){
-        const [ax, ay] = m2vb(chain.last[0], chain.last[1]);
+      if (rb && chain){
         rb.style.display = "";
+        const [ax, ay] = m2vb(chain.last[0], chain.last[1]);
         rb.setAttribute("x1", fmt(ax)); rb.setAttribute("y1", fmt(ay));
-        rb.setAttribute("x2", fmt((L.ox + (wx - draft.envelope.x0) * L.s)));
-        rb.setAttribute("y2", fmt((L.oy + (draft.envelope.y1 - wy) * L.s)));
-      }
+        rb.setAttribute("x2", fmt(mx)); rb.setAttribute("y2", fmt(my));
+      } else if (rb){ rb.style.display = "none"; }
+      renderSnapFx(curSnap);
+    } else {
+      renderSnapFx(null);
+      curSnap = { m: null, kind: "free", ref: null };
     }
   });
 });
@@ -370,7 +479,7 @@ svg.addEventListener("pointerup", ev => {
 });
 svg.addEventListener("click", ev => {
   const m = meters(ev, false);
-  if (tool === "draw") chainAt(m);
+  if (tool === "draw") chainAt(ev);
 });
 svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
 
