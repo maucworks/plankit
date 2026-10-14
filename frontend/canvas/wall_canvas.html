@@ -1173,7 +1173,37 @@ svg.addEventListener("click", ev => {
 });
 svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
 
+// ── tolerant edit-mode vertex drag (root handler, survives narrow dots) ─
+svg.addEventListener("pointerdown", ev => {
+  if (tool !== "edit" || ev.button !== 0) return;
+  const pt = metersRaw(ev);
+  const tol = Math.max(0.3, 14 / layout().s);
+  let joint = null, best_d = tol;
+  for (const jp of allJoints()){
+    const d = Math.hypot(jp[0]-pt[0], jp[1]-pt[1]);
+    if (d < best_d){ joint = jp; best_d = d; }
+  }
+  if (!joint) return;                       // let click handler select edge/face
+  ev.stopImmediatePropagation();
+  vertexDrag = { orig: [joint[0], joint[1]], work: [joint[0], joint[1]],
+                segIdxList: ((svg._joints || new Map()).get(joint.join(",")) || []),
+                armSeg: -1 };
+  selection = { type: "joint", pt: joint.slice(), segs: vertexDrag.segIdxList.slice() };
+  if (selection.segs.length === 0){
+    for (const [k, idxList] of (svg._joints || new Map()))
+      if (k === joint.join(",")) selection.segs = idxList.slice();
+  }
+  document.getElementById("selInfo").textContent = "vertex [" + joint.map(fmt).join(", ") + "] · " +
+    (selection.segs.length || 0) + " strokes";
+  document.getElementById("edgeActions").style.display = "none";
+  document.getElementById("vtxActions").style.display = "block";
+  svg.setPointerCapture(ev.pointerId);
+  draw();
+  feedback("dragging vertex [" + joint.map(fmt).join(", ") + "]");
+}, true);
+
 // ── interactive drag re-solve ─────────────────────────────────────────
+
 let liveSeq = 0;
 function solvedHints(){
   const solved = draft._solved;
@@ -1215,6 +1245,7 @@ async function liveSolve(){
 }
 function runLiveSolve(){ if (tool === "vertex") scheduleLive(false); }
 function flushLiveSolve(){ if (tool === "vertex") scheduleLive(true); }
+
 
 // ── noding + tags ──────────────────────────────────────────────────────
 async function noding(){
@@ -1461,6 +1492,7 @@ if (demo){
   solveDraft().then(gateDraft);
 }
 </script>
+
 
 
 </body>
