@@ -22,6 +22,7 @@ from plankit.store import VariantStore, make_variant
 from plankit.svg import geometry_view, to_svg
 from plankit.templates import TemplateDraft, TemplateStore
 from plankit.wallsolve import solve_areas
+from plankit.wallgate import gate
 from plankit.wallgraph import WallGraphDraft, WallGraphStore, draft_preview_svg
 
 
@@ -42,6 +43,11 @@ class ValidateRequest(DraftRequest):
 class SolveRequest(DraftRequest):
     hints: list[dict] | None = None
     budget: float | None = None
+
+
+class GateRequest(SolveRequest):
+    program: dict
+    min_widths: dict[str, float] | None = None
 
 
 class ReviseRequest(BaseModel):
@@ -239,6 +245,26 @@ def create_app(
             return solve_areas(d, seconds=budget or 15.0, hints=req.hints or None)
         except Exception as exc:  # malformed draft, ortools hiccup
             raise HTTPException(status_code=503, detail=f"solve failed: {exc}") from exc
+
+    @app.post("/templates/graph/gate")
+    def wallgraph_gate(req: GateRequest):
+        """Score a (solved) drawing against a PvE program — the v1 harness.
+
+        Projects the wall graph onto a labelled skeleton, runs ``conform``
+        plus the ``quality`` metrics, judges ensemble faces as an aggregate
+        and reports every program door the drawing does or does not realise.
+        """
+        d = WallGraphDraft.from_dict(req.draft)
+        try:
+            program = RoomProgram.from_dict(req.program)
+            return gate(
+                d,
+                program,
+                junctions=req.hints or None,
+                min_widths=req.min_widths or None,
+            )
+        except Exception as exc:  # malformed draft/program
+            raise HTTPException(status_code=503, detail=f"gate failed: {exc}") from exc
 
     @app.post("/templates/graph/drafts/{name}")
     def wallgraph_save(name: str, req: DraftRequest):

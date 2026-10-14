@@ -104,6 +104,16 @@
     </div>
     <div id="regionInfo" style="font-size:12px;color:#374151;margin-top:8px">click a region with the ▦ tool.</div>
 
+    <h2>pve · gate</h2>
+    <div class="row">
+      <button id="btnGate">⛨ gate (harness)</button>
+    </div>
+    <details>
+      <summary>program (PvE JSON)</summary>
+      <textarea id="pveJson" rows="9" spellcheck="false"></textarea>
+    </details>
+    <ul id="gateList"></ul>
+
     <h2>grid</h2>
     <div class="row">
       <label>master axis
@@ -847,6 +857,59 @@ document.getElementById("btnClearSolved").addEventListener("click", () => {
 });
 function feedback(msg){ document.getElementById("feedback").textContent = msg; }
 
+// the v1 harness, run on this drawing: conform + quality metrics over a
+// projected labelled skeleton, ensembles as aggregate, doors as drawn
+const DEMO_PVE = {
+  nodes: {
+    "A1-woon": { area_min: 640, area_max: 680 },
+    "A1-bad": { area_min: 170, area_max: 190, wet: true },
+    "A1-keuken": { area_min: 180, area_max: 200, wet: true },
+    "buiten": { exterior: true },
+  },
+  edges: [
+    { a: "A1-woon", b: "A1-bad", kind: "door" },
+    { a: "A1-woon", b: "buiten", kind: "facade" },
+  ],
+};
+async function gateDraft(){
+  let program;
+  try { program = JSON.parse(document.getElementById("pveJson").value.trim()); }
+  catch (e){ feedback("program JSON invalid: " + e.message); return; }
+  readDraft();
+  const r = await fetch(API + "/templates/graph/gate", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft, program, hints: solvedHints() }),
+  });
+  if (!r.ok){
+    const j = await r.json().catch(() => ({}));
+    feedback("gate failed: " + (j.detail || r.status));
+    return;
+  }
+  const j = await r.json();
+  const c = j.conform || {}, m = j.metrics || {}, d = j.doors || {};
+  const lines = ["status: " + j.status +
+    ` · doors ${d.drawn || 0} drawn, ${d.blocked || 0} blocked, ${d.separated || 0} separated`];
+  (j.faces || []).filter(f => f.label_key)
+    .forEach(f => lines.push("✓ " + f.label_key + ": " + fmt(f.area) + " m2"));
+  (j.ensembles || []).forEach(e => lines.push((e.ok ? "✓ " : "✗ ") + "ensemble " +
+    e.keys.join(" + ") + ": " + fmt(e.area) + " m2 vs Σ band " +
+    fmt(e.band[0]) + ".." + fmt(e.band[1]) + " m2"));
+  (c.violated || []).forEach(v => lines.push("✗ " + v));
+  (c.missing || []).forEach(v => lines.push("✗ missing " + v));
+  const ac = m.access_components || {};
+  if (ac.components > 1) lines.push("! access graph: " + ac.components +
+    " components - unreachable from " + ac.root + ": " + ac.unreachable.join(", "));
+  if (m.fill_ratio != null) lines.push("fill " + fmt(m.fill_ratio) +
+    " · facade ratio " + fmt(m.facade_ratio) +
+    (m.escape_depth && Object.keys(m.escape_depth).length ? " · escape depths " + JSON.stringify(m.escape_depth) : ""));
+  (j.notes || []).forEach(n => lines.push("· " + n));
+  document.getElementById("gateList").innerHTML =
+    lines.map(l => "<li>" + l + "</li>").join("");
+  feedback("gate " + j.status + " — " + (c.satisfied || []).length + " satisfied, " +
+    (c.violated || []).length + " violated, " + (c.missing || []).length + " missing.");
+}
+document.getElementById("btnGate").addEventListener("click", gateDraft);
+
 [fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding(); refreshHelperList();
 if (demo) solveDraft(); }));
 window.addEventListener("resize", () => draw());
@@ -856,16 +919,23 @@ if (demo){
   draft.segments = [
     { x0: 0, y0: 0, x1: 40, y1: 0 }, { x0: 40, y0: 0, x1: 40, y1: 26 },
     { x0: 40, y0: 26, x1: 0, y1: 26 }, { x0: 0, y0: 26, x1: 0, y1: 0 },
-    { x0: 0, y0: 10, x1: 40, y1: 10 },
+    // the divider with a drawn passage (access) in it: that stroke is what
+    // realises the program door between living and wet
+    { x0: 0, y0: 10, x1: 14, y1: 10 }, { x0: 14, y0: 10, x1: 20, y1: 10 },
+    { x0: 20, y0: 10, x1: 40, y1: 10 },
   ];
-  draft.edges = { "0": "facade", "1": "facade", "2": "facade", "3": "facade" };
+  draft.edges = { "0": "facade", "1": "facade", "2": "facade", "3": "facade",
+                  "5": "access" };
   draft.faces = [
     { key: "living", label: "living", items: ["*-woon"], area_min: 640, area_max: 680, centroid: [20, 18] },
     { key: "wet", label: "wet", items: ["*-bad", "keuken.*"], area_min: 370, area_max: 390, centroid: [20, 5] },
   ];
 }
 readDraft(); draw(); noding(); refreshHelperList();
-if (demo) solveDraft();
+if (demo){
+  document.getElementById("pveJson").value = JSON.stringify(DEMO_PVE, null, 1);
+  solveDraft().then(gateDraft);
+}
 </script>
 </body>
 </html>

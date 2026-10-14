@@ -175,8 +175,7 @@ class WallGraphDraft:
             if area < EPS_AREA:
                 continue
             verts = sd.face_vertices(fid)
-            cx = sum(p[0] for p in verts) / len(verts)
-            cy = sum(p[1] for p in verts) / len(verts)
+            cx, cy = sd.face_centroid(fid)
             tag, matched = self._match_face(cx, cy)
             out.append(
                 {

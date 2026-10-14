@@ -186,6 +186,27 @@ def solve_areas(
         for key, kinds in incident_kinds.items()
         if kinds and all(k == "facade" for k in kinds)
     }
+    # Sealed feet: an interior stroke that *ends* on the envelope seals a
+    # room against it. Its foot junction may slide along the outline but
+    # may not leave it — otherwise the stroke lifts off the facade, the two
+    # rooms merge around the gap, and the model reports a face the architect
+    # never drew. Outline corners are already pinned by `anchored`.
+    ex0, ey0, ex1, ey1 = (
+        draft.envelope.x0,
+        draft.envelope.y0,
+        draft.envelope.x1,
+        draft.envelope.y1,
+    )
+    sealed: Dict[Tuple[int, int], set] = {}
+    for i, stroke in enumerate(draft.segments):
+        if draft.edges.get(i, "wall") == "facade":
+            continue
+        for px, py in ((stroke["x0"], stroke["y0"]), (stroke["x1"], stroke["y1"])):
+            axes = sealed.setdefault((_dm(px), _dm(py)), set())
+            if abs(px - ex0) < JEPS or abs(px - ex1) < JEPS:
+                axes.add("x")
+            if abs(py - ey0) < JEPS or abs(py - ey1) < JEPS:
+                axes.add("y")
 
     m = cp_model.CpModel()
     X: Dict[Tuple[int, int], Any] = {}
@@ -228,6 +249,11 @@ def solve_areas(
         # displacement, so the solve settles as close to the drawn
         # sketch as the area bands allow
         move_terms.extend([absx[key], absy[key]])
+        for axis in sealed.get(key, ()):  # a stroke foot stays on the outline
+            if axis == "x":
+                m.Add(X[key] == _dm(ex0 if abs(ox - ex0) < JEPS else ex1))
+            else:
+                m.Add(Y[key] == _dm(ey0 if abs(oy - ey0) < JEPS else ey1))
         if binding:
             # helper-grid binding: the junction's line-axis coordinate
             # equals the line position (vertical line pins X, horizontal

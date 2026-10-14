@@ -146,3 +146,94 @@ def test_hints_ignored_for_unknown_junctions():
         hints=[{"orig": [99.0, 99.0], "solved": [1.0, 1.0]}, {"bogus": 1}],
     )
     assert out["status"] == "solved"
+
+
+def _sealed_draft() -> dict:
+    """A divider that *lands* on the facade stroke (not on a drawn joint).
+
+    The divider foot at (14, 0) is a stroke end on the envelope: sealing
+    the core against the corridor. Left free, the least-L1 search lifts
+    the foot off the outline, the two regions merge around the gap and
+    the model reports a face nobody drew.
+    """
+    return {
+        "kind": "wallgraph",
+        "name": "sealed-foot",
+        "envelope": {"x0": 0, "y0": 0, "x1": 30, "y1": 12},
+        "grid": 3.3,
+        "segments": [
+            {"x0": 0, "y0": 0, "x1": 30, "y1": 0},  # facade
+            {"x0": 30, "y0": 0, "x1": 30, "y1": 12},  # facade
+            {"x0": 30, "y0": 12, "x1": 0, "y1": 12},  # facade
+            {"x0": 0, "y0": 12, "x1": 0, "y1": 0},  # facade
+            {"x0": 14, "y0": 0, "x1": 14, "y1": 9},  # divider foot ON the facade
+            {"x0": 0, "y0": 9, "x1": 14, "y1": 9},
+            {"x0": 14, "y0": 9, "x1": 14, "y1": 12},  # ensemble | gang wall
+        ],
+        "edges": {
+            "0": "facade",
+            "1": "facade",
+            "2": "facade",
+            "3": "facade",
+            "6": "wall",
+        },
+        "faces": [
+            {
+                "key": "kern",
+                "label": "kern",
+                "items": ["kern"],
+                "area_min": 110,
+                "area_max": 125,
+                "centroid": [7, 4.5],
+            },
+            {
+                "key": "A1",
+                "label": "A1",
+                "items": ["A1-*"],
+                "area_min": 41,
+                "area_max": 50,
+                "centroid": [7, 10.5],
+            },
+            {
+                "key": "gang",
+                "label": "gang",
+                "items": ["gang"],
+                "area_min": 180,
+                "area_max": 200,
+                "centroid": [22, 6],
+            },
+        ],
+    }
+
+
+def test_a_stroke_foot_stays_sealed_on_the_envelope():
+    draft = WallGraphDraft.from_dict(_sealed_draft())
+    out = solve_areas(draft, 15.0)
+    assert out["status"] == "solved", out.get("errors")
+    solved = {(j["orig"][0], j["orig"][1]): j["solved"] for j in out["junctions"]}
+    # the foot (14, 0) sits on the envelope: it may slide along x, never off y
+    assert solved[(14.0, 0.0)][1] == 0.0
+    assert solved[(0.0, 0.0)] == [0.0, 0.0]
+    # the core instead shrinks by sliding its top line down inside the plan
+    assert out["faces"][0]["area"] <= 125.0
+    areas = {f["key"]: f["area"] for f in out["faces"]}
+    assert 110 <= areas["kern"] <= 125 and areas["gang"] <= 200
+
+
+def test_sealed_foot_keeps_the_two_regions_apart():
+    """After the solve the drawing must still node into three rooms."""
+    from plankit.program import ProgramSpace, RoomProgram
+    from plankit.wallgate import gate
+
+    draft = WallGraphDraft.from_dict(_sealed_draft())
+    out = solve_areas(draft, 15.0)
+    program = RoomProgram(
+        nodes={
+            "kern": ProgramSpace(area_min=110, area_max=125),
+            "A1-slaap1": ProgramSpace(area_min=41, area_max=50),
+            "gang": ProgramSpace(area_min=180, area_max=200),
+        }
+    )
+    report = gate(draft, program, junctions=out["junctions"])
+    assert len(report["faces"]) == 3
+    assert report["conform"]["missing"] == []
