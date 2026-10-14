@@ -118,7 +118,7 @@ let draft = { name: "open-kern", description: "", envelope: {x0:0,y0:0,x1:40,y1:
 let mode = "sel", selected = null;
 let drawing = null;       // {mode, mx0,my0,mx1,my1} in metres (anchor fixed)
 let moving = null;        // {z, startM:[x,y], orig:{band}, kind:"move"|"resize"}
-let ghostEl = null, raf = 0;
+let ghostEl = null, frame = 0;
 
 const svg = document.getElementById("c");
 const fmt = n => (Math.round(n * 100) / 100);
@@ -256,7 +256,7 @@ function updateZoneGeometry(z){
   }
 }
 
-function raf(fn){ if (!raf) raf = requestAnimationFrame(() => { raf = 0; fn(); }); }
+function withFrame(fn){ if (!frame) frame = requestAnimationFrame(() => { frame = 0; fn(); }); }
 
 // ── interaction ────────────────────────────────────────────────────────
 function startDrag(ev, z, kind){
@@ -275,7 +275,7 @@ svg.addEventListener("pointerdown", ev => {
   svg.setPointerCapture(ev.pointerId);
 });
 svg.addEventListener("pointermove", ev => {
-  raf(() => {
+  withFrame(() => {
     if (moving){
       const [mx, my] = evPoint(ev);
       const dx = fmt(mx - moving.startM[0]), dy = fmt(my - moving.startM[1]);

@@ -1,0 +1,477 @@
+<!doctype html>
+<!--
+  plankit wall-graph canvas (dev-only): template = a drawing.
+  Draw wall centerlines; the plankit noder nodes them at crossings and
+  T-junctions, closed regions fall out as faces; tag faces (items,
+  area band) and edges (wall/open/access/facade). Same interaction core
+  as the zone canvas: client→viewBox via getScreenCTM, rAF-throttled,
+  page never scrolls. AI-generated file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>plankit — wall graph canvas</title>
+<style>
+  :root { --line:#374151; --acc:#f97316; --open:#059669; --facade:#9a3412; }
+  html, body { overflow: hidden; height: 100%; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #f5f5f4; }
+  #wrap { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+  #canvasPane { flex: 1 1 62%; overflow: hidden; padding: 12px; display: flex; flex-direction: column; }
+  #panel { flex: 0 0 340px; background: #fff; border-left: 1px solid #e5e7eb; padding: 12px; overflow-y: auto; }
+  svg { background: #fff; border: 1px solid #d1d5db; display: block; width: 100%;
+        max-height: calc(100vh - 140px); touch-action: none; }
+  svg.mode-draw, svg.mode-split, svg.mode-vertex, svg.mode-etag, svg.mode-face, svg.mode-erase { cursor: crosshair; }
+  svg.mode-sel  { cursor: default; }
+  h1 { font-size: 16px; margin: 4px 0 8px; }
+  h2 { font-size: 12px; margin: 14px 0 4px; color: #374151; text-transform: uppercase; letter-spacing: .04em; }
+  button { font: inherit; padding: 3px 9px; margin: 1px; border: 1px solid #9ca3af; background: #fff; border-radius: 4px; cursor: pointer; }
+  button.active { background: #111827; color: #fff; border-color: #111827; }
+  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+  label { display: block; font-size: 12px; color: #374151; margin-top: 6px; }
+  input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 3px 6px; border: 1px solid #d1d5db; border-radius: 4px; }
+  .row { display: flex; gap: 6px; } .row > * { flex: 1; min-width: 0; }
+  #feedback { font-size: 12px; white-space: pre-wrap; background: #111827; color: #d1fae5;
+              min-height: 100px; margin-top: 10px; padding: 8px; border-radius: 4px; overflow: auto; max-height: 170px; }
+  #drafts li { cursor: pointer; padding: 2px 0; }
+  #drafts li:hover { color: var(--acc); }
+  .seg { stroke: var(--line); stroke-width: 2.5; }
+  .seg.open { stroke: var(--open); stroke-width: 2; stroke-dasharray: 6 4; }
+  .seg.access { stroke: var(--acc); stroke-width: 2.5; }
+  .seg.facade { stroke: var(--facade); stroke-width: 3; }
+  .seg.hot { stroke: #111827; stroke-width: 3.2; }
+  .vert { fill: #111827; r: 4; cursor: move; }
+  .vert.hot { fill: var(--acc); r: 6; }
+  .face-fill { pointer-events: all; cursor: pointer; }
+  .facelabel { font-size: 11px; fill: #111827; pointer-events: none; }
+  .joint { pointer-events: none; }
+  .rubber { stroke: #111827; stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+  .envelope { fill: none; stroke: #cbced6; stroke-width: 3; pointer-events: none; }
+  .hint { font-size: 12px; color: #6b7280; margin: 4px 0; min-height: 16px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="canvasPane">
+    <h1>plankit — wall graph canvas <span style="font-size:11px;color:#9ca3af">(template = a drawing)</span></h1>
+    <div>
+      <button class="tool active" data-tool="draw"  title="polyline chain: click = vertex, double-click = end">✏ draw</button>
+      <button class="tool" data-tool="split"  title="click a line: point on the line splits it">✂ split</button>
+      <button class="tool" data-tool="vertex" title="drag a drawn endpoint">⛓ vertex</button>
+      <button class="tool" data-tool="etag"   title="click a segment: apply the edge kind below">EDGE</button>
+      <span style="display:inline-block;margin:0 6px">
+        <select id="edgeKind" title="edge kind to apply">
+          <option value="wall">wall</option>
+          <option value="open">open (no wall: kitchen bleed)</option>
+          <option value="access">access</option>
+          <option value="facade">facade</option>
+        </select>
+      </span>
+      <button class="tool" data-tool="face"   title="click a region: designate it as a room">▦ face</button>
+      <button class="tool" data-tool="erase"  title="click a segment to erase it">🧽 erase</button>
+      <button class="tool" data-tool="sel"    title="idle">✥ idle</button>
+      <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
+    </div>
+    <div class="hint" id="drawHint">draw: click = vertex, the chain continues, double-click ends it. split: click on a line kills it into two lines at the point. face: click a shaded region to tag it as a room (label, items, m²-band).</div>
+    <svg id="c" width="100%"></svg>
+  </div>
+  <div id="panel">
+    <h2>draft</h2>
+    <label>name <input id="fName" value="open-kern-wall"></label>
+    <label>description <input id="fDescr" value=""></label>
+    <div class="row">
+      <label>frame x (m) <input id="fEx" type="number" value="40" step="0.5" min="5"></label>
+      <label>frame y (m) <input id="fEy" type="number" value="26" step="0.5" min="5"></label>
+    </div>
+    <label>grid (m) <input id="fGrid" type="number" value="3.3" step="0.1" min="0.5"></label>
+
+    <h2>region under the cursor</h2>
+    <label>key <input id="fKey" placeholder="living"></label>
+    <label>display label <input id="fLbl" placeholder="living"></label>
+    <label>items (fnmatch, comma) <input id="fItems" placeholder="slaap.*, B*-woon"></label>
+    <div class="row">
+      <label>area min (m²) <input id="fAmin" type="number" step="0.5"></label>
+      <label>area max (m²) <input id="fAmax" type="number" step="0.5"></label>
+    </div>
+    <div class="row">
+      <button id="btnTag">Apply to clicked region</button>
+      <button id="btnClearTag">Clear tag</button>
+    </div>
+    <div id="regionInfo" style="font-size:12px;color:#374151;margin-top:8px">click a region with the ▦ tool.</div>
+
+    <h2>drafts</h2>
+    <div class="row">
+      <button id="btnSave" class="primary">💾 save</button>
+      <button id="btnRefresh">↻ list</button>
+    </div>
+    <ul id="drafts"></ul>
+    <div class="row">
+      <button id="btnPreview">🖼 server render</button>
+      <button id="btnDelDraft">🗑 delete named</button>
+    </div>
+    <div id="preview"></div>
+    <div id="feedback">ready.</div>
+  </div>
+</div>
+<script>
+"use strict";
+const API = "";
+const VB = { w: 1000, h: 620 };
+const PAD = 26;
+
+let draft = { kind: "wallgraph", name: "open-kern-wall", description: "",
+  envelope: {x0: 0, y0: 0, x1: 40, y1: 26}, grid: 3.3,
+  segments: [], edges: {}, faces: [] };
+let tool = "draw", selectedFace = null, pendingTag = null;
+let chain = null;          // running polyline: {first:[x,y], last:[x,y]}
+let vertexDrag = null;     // {pt, segIdxList, startM}
+let ghost = null, faceLayerDirty = true, rafOn = 0;
+
+const svg = document.getElementById("c");
+const fmt = n => Math.round(n * 100) / 100;
+// click → meters: rounded to 0.05 m (dense enough for drafting, keeps noding snappy)
+const SNAP = 0.05;
+
+function layout(){
+  const ex = draft.envelope.x1 - draft.envelope.x0;
+  const ey = draft.envelope.y1 - draft.envelope.y0;
+  const s = Math.min((VB.w - 2*PAD) / ex, (VB.h - 2*PAD) / ey);
+  return { s, ox: (VB.w - ex*s) / 2, oy: (VB.h - ey*s) / 2 };
+}
+function m2vb(x, y){
+  const L = layout();
+  return [L.ox + (x - draft.envelope.x0) * L.s, L.oy + (draft.envelope.y1 - y) * L.s];
+}
+function pointerView(ev){
+  const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
+  if (!svg.getScreenCTM()) return { x: 0, y: 0 };
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+function withFrame(fn){ if (!rafOn) rafOn = requestAnimationFrame(() => { rafOn = 0; fn(); }); }
+
+function setVB(){
+  svg.setAttribute("viewBox", `0 0 ${VB.w} ${VB.h}`);
+  svg.setAttribute("class", "mode-" + tool);
+}
+function draw(){
+  setVB();
+  const L = layout();
+  const [ex0, ey1] = m2vb(draft.envelope.x0, draft.envelope.y1);
+  const ex = (draft.envelope.x1 - draft.envelope.x0) * L.s, ey = (draft.envelope.y1 - draft.envelope.y0) * L.s;
+  let parts = [];
+  parts.push(`<rect class="envelope" x="${ex0}" y="${ey1}" width="${ex}" height="${ey}"/>`);
+  // face fills (server noding result)
+  for (const f of (draft.faces || [])){
+    if (!f.verts || !f.verts.length) continue;
+    const pts = f.verts.map(v => m2vb(v[0], v[1]).map(n => fmt(n)).join(",")).join(" ");
+    parts.push(`<polygon class="face-fill" data-cx="${f.centroid[0]}" data-cy="${f.centroid[1]}" points="${pts}"
+      fill="#bcd7ee" fill-opacity="${f.label ? 0.55 : 0.3}"/>`);
+    const [tx, ty] = m2vb(f.centroid[0], f.centroid[1]);
+    parts.push(`<text class="facelabel" x="${tx}" y="${ty}" text-anchor="middle">${(f.label ? f.label + " · " : "")}${fmt(f.area)} m2</text>`);
+  }
+  // segments + edge kind styles
+  draft.segments.forEach((s, i) => {
+    const [x1, y1] = m2vb(s.x0, s.y0), [x2, y2] = m2vb(s.x1, s.y1);
+    const kind = draft.edges[i] || "wall";
+    parts.push(`<line class="seg ${kind}" data-idx="${i}" data-kind="${kind}" x1="${fmt(x1)}" y1="${fmt(y1)}" x2="${fmt(x2)}" y2="${fmt(y2)}"/>`);
+  });
+  // joints: distinct segment endpoints (for the vertex tool)
+  const seen = new Map();
+  draft.segments.forEach((s, i) => {
+    for (const [px, py] of [[s.x0, s.y0], [s.x1, s.y1]]){
+      const k = px + "," + py;
+      if (!seen.has(k)) seen.set(k, []);
+      seen.get(k).push(i);
+    }
+  });
+  svg._joints = seen;
+  for (const [k, idxList] of seen){
+    const [px, py] = k.split(",").map(Number);
+    const [vx, vy] = m2vb(px, py);
+    parts.push(`<circle class="vert" data-pt="${k}" data-segs="${idxList.join(",")}" cx="${fmt(vx)}" cy="${fmt(vy)}"/>`);
+  }
+  parts.push('<line id="rubber" class="rubber" style="display:none"/>');
+  svg.innerHTML = parts.join("");
+  bindLayer();
+}
+
+function bindLayer(){
+  svg.querySelectorAll(".zone-rect").forEach(() => {});
+  svg.querySelectorAll(".vert").forEach(c => {
+    c.addEventListener("pointerdown", ev => {
+      if (tool !== "vertex") return;
+      ev.stopPropagation();
+      const pt = c.dataset.pt.split(",").map(Number);
+      vertexDrag = { orig: [pt[0], pt[1]], work: [pt[0], pt[1]], segIdxList: c.dataset.segs.split(",").map(Number) };
+      svg.setPointerCapture(ev.pointerId);
+      feedback("moving joint " + pt + " — release to settle.");
+    });
+  });
+  svg.querySelectorAll(".seg").forEach(l => {
+    l.addEventListener("click", ev => {
+      if (tool === "etag"){
+        draft.edges[l.dataset.idx] = document.getElementById("edgeKind").value;
+        draw(); noding();
+      } else if (tool === "erase"){
+        draft.edges = Object.fromEntries(Object.entries(draft.edges)
+          .map(([k, v]) => [String(Math.max(Number(k) - (Number(k) > l.dataset.idx ? 1 : 0)), v)])
+          .filter(([k]) => Number(k) !== Number(l.dataset.idx)));
+        draft.segments.splice(Number(l.dataset.idx), 1);
+        draw(); noding();
+      } else if (tool === "split"){
+        splitSegmentAt(Number(l.dataset.idx), ev);
+      }
+    });
+  });
+  svg.querySelectorAll(".face-fill").forEach(f => {
+    f.addEventListener("click", ev => {
+      if (tool !== "face") return;
+      selectedFace = currentFaces().find(x =>
+        x.centroid[0] === Number(f.dataset.cx) && x.centroid[1] === Number(f.dataset.cy));
+      pendingTag = selectedFace || null;
+      if (pendingTag){
+        fKey.value = pendingTag.key || suggestedKey(pendingTag);
+        fLbl.value = pendingTag.label || "";
+        fItems.value = (pendingTag.items || []).join(", ");
+        fAmin.value = pendingTag.area_min ?? "";
+        fAmax.value = pendingTag.area_max ?? "";
+        document.getElementById("regionInfo").textContent =
+          `index ${pendingTag.index} · ${fmt(pendingTag.area)} m² · centroid ${pendingTag.centroid}`;
+        feedback("region picked — fill key/label/items/area band and Apply.");
+      }
+    });
+  });
+}
+function suggestedKey(face){ return "room" + (draft.faces.length + 1); }
+function currentFaces(){
+  return draft._faces || [];
+}
+
+// ── tools ──────────────────────────────────────────────────────────────
+function setTool(next){
+  tool = next;
+  document.querySelectorAll("button.tool").forEach(x => x.classList.toggle("active", x.dataset.tool === next));
+  setVB();
+}
+document.querySelectorAll("button.tool").forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
+function typingInField(ev){
+  const t = ev.target;
+  return t &&(["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName));
+}
+document.addEventListener("keydown", ev => {
+  if (typingInField(ev)) return;
+  if (ev.key === "Escape" && chain){ endChain(); }
+  if (ev.key === "d") setTool("draw");
+  if (ev.key === "s") setTool("split");
+  if (ev.key === "v") setTool("vertex");
+  if (ev.key === "e") setTool("etag");
+  if (ev.key === "f") setTool("face");
+  if (ev.key === "x") setTool("erase");
+});
+
+// ── polyline chain ─────────────────────────────────────────────────────
+function endChain(){
+  if (!chain){ return; }
+  chain = null;
+  document.getElementById("rubber").style.display = "none";
+  draw(); noding();
+  feedback("polyline ended — " + draft.segments.length + " segments, noding…");
+}
+document.getElementById("btnEnd").addEventListener("click", endChain);
+
+function chainAt(m){
+  if (!chain){ chain = { first: [m[0], m[1]], last: [m[0], m[1]] };
+    feedback("chain started — click the next vertices; click the first again closes, double-click or Esc ends."); return; }
+  if (Math.hypot(m[0] - chain.first[0], m[1] - chain.first[1]) < 0.35 && draft.segments.length){
+    endChain(); return;  // clicking the start point closes the chain
+  }
+  if (Math.hypot(m[0] - chain.last[0], m[1] - chain.last[1]) < 0.1) return;
+  draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: m[0], y1: m[1] });
+  chain.last = [m[0], m[1]];
+  draw(); noding();
+}
+
+// ── split: point on the line splits it ────────────────────────────────
+function splitSegmentAt(idx, ev){
+  const s = draft.segments[idx];
+  const p = meters(ev, true);
+  const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+  const t = Math.max(0.05, Math.min(0.95, ((p[0]-s.x0)*dx + (p[1]-s.y0)*dy) / (dx*dx + dy*dy || 1e-12)));
+  const mx = fmt(s.x0 + t*dx), my = fmt(s.y0 + t*dy);
+  const kind = draft.edges[idx];
+  const second = { x0: mx, y0: my, x1: s.x1, y1: s.y1 };
+  s.x1 = mx; s.y1 = my;
+  draft.segments.splice(idx + 1, 0, second);
+  const ne = {};
+  Object.keys(draft.edges).forEach(k => {
+    const kn = Number(k);
+    ne[kn > idx ? kn + 1 : kn] = draft.edges[k];
+  });
+  if (kind){ ne[idx] = kind; ne[idx + 1] = kind; }
+  draft.edges = ne;
+  draw(); noding();
+  feedback("split segment " + idx + " at [" + mx + ", " + my + "].");
+}
+
+function meters(ev, snapLoose){
+  const p = pointerView(ev);
+  const L = layout();
+  const mx = draft.envelope.x0 + (p.x - L.ox) / L.s;
+  const my = draft.envelope.y1 - (p.y - L.oy) / L.s;
+  const cx = Math.min(Math.max(mx, draft.envelope.x0), draft.envelope.x1);
+  const cy = Math.min(Math.max(my, draft.envelope.y0), draft.envelope.y1);
+  const step = snapLoose ? 5 : 1;
+  return [fmt(Math.round(cx / SNAP) * SNAP), fmt(Math.round(cy / SNAP) * SNAP)];
+}
+
+// ── point events ───────────────────────────────────────────────────────
+svg.addEventListener("pointermove", ev => {
+  withFrame(() => {
+    if (chain){
+      const p = pointerView(ev), L = layout();
+      const wx = draft.envelope.x0 + (p.x - L.ox) / L.s, wy = draft.envelope.y1 - (p.y - L.oy) / L.s;
+      const rb = document.getElementById("rubber");
+      if (rb){
+        const [ax, ay] = m2vb(chain.last[0], chain.last[1]);
+        rb.style.display = "";
+        rb.setAttribute("x1", fmt(ax)); rb.setAttribute("y1", fmt(ay));
+        rb.setAttribute("x2", fmt((L.ox + (wx - draft.envelope.x0) * L.s)));
+        rb.setAttribute("y2", fmt((L.oy + (draft.envelope.y1 - wy) * L.s)));
+      }
+    }
+  });
+});
+svg.addEventListener("pointermove", ev => {
+  if (tool === "vertex" && vertexDrag){
+    withFrame(() => {
+      const [mx, my] = meters(ev, false);
+      if (Math.abs(mx - vertexDrag.work[0]) < 0.05 && Math.abs(my - vertexDrag.work[1]) < 0.05) return;
+      const o = vertexDrag.orig;
+      vertexDrag.work = [mx, my];
+      vertexDrag.segIdxList.forEach(i => {
+        const s = draft.segments[i];
+        if (Math.abs(s.x0 - o[0]) < 1e-6 && Math.abs(s.y0 - o[1]) < 1e-6){ s.x0 = mx; s.y0 = my; }
+        else if (Math.abs(s.x1 - o[0]) < 1e-6 && Math.abs(s.y1 - o[1]) < 1e-6){ s.x1 = mx; s.y1 = my; }
+        else {
+          const d0 = Math.hypot(s.x0 - o[0], s.y0 - o[1]);
+          const d1 = Math.hypot(s.x1 - o[0], s.y1 - o[1]);
+          if (d0 <= d1){ s.x0 = mx; s.y0 = my; } else { s.x1 = mx; s.y1 = my; }
+        }
+      });
+      draw();
+    });
+  }
+});
+svg.addEventListener("pointerup", ev => {
+  if (tool === "vertex" && vertexDrag){
+    vertexDrag = null;
+    draw(); noding();
+    feedback("joint moved — re-noding.");
+  }
+});
+svg.addEventListener("click", ev => {
+  const m = meters(ev, false);
+  if (tool === "draw") chainAt(m);
+});
+svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
+
+// ── noding + tags ──────────────────────────────────────────────────────
+async function noding(){
+  readDraft();
+  const r = await fetch(API + "/templates/graph/noding", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  if (!r.ok){ const j = await r.json().catch(() => ({})); feedback("noding failed: " + (j.detail || r.status)); return null; }
+  const j = await r.json();
+  draft._faces = j.faces || [];
+  draw();
+  feedback(((j.errors || []).length ? "draft errors:\n" + j.errors.join("\n") : "regions: " + (j.faces || []).length) +
+    "\n" + (j.faces || []).map(f => `#${f.index} ${f.label || "?"} ${fmt(f.area)} m2${f.matched ? "" : " (unlabelled)"}`).join("\n"));
+  return j.faces;
+}
+function readDraft(){
+  draft.name = fName.value.trim(); draft.description = fDescr.value;
+  draft.grid = Number(fGrid.value) || 3.3;
+  draft.envelope = { x0: 0, y0: 0, x1: Number(fEx.value) || 40, y1: Number(fEy.value) || 26 };
+}
+
+// face tagging: apply panel to the clicked region (nearest-centroid match)
+document.getElementById("btnTag").addEventListener("click", () => {
+  if (!pendingTag){ feedback("click a region with the ▦ tool first."); return; }
+  const tag = {
+    key: fKey.value.trim() || suggestedKey(),
+    label: fLbl.value.trim(),
+    items: fItems.value.split(",").map(s => s.trim()).filter(Boolean),
+    area_min: fAmin.value === "" ? null : Number(fAmin.value),
+    area_max: fAmax.value === "" ? null : Number(fAmax.value),
+    centroid: pendingTag.centroid,
+  };
+  draft.faces = draft.faces.filter(f =>
+    Math.hypot(f.centroid[0] - tag.centroid[0], f.centroid[1] - tag.centroid[1]) > 0.5);
+  draft.faces.push(tag);
+  draw(); noding();
+  feedback("tagged '" + tag.label + "' " + tag.key + " items " + tag.items.join(","));
+});
+document.getElementById("btnClearTag").addEventListener("click", () => {
+  if (!pendingTag){ feedback("no region selected."); return; }
+  draft.faces = draft.faces.filter(f =>
+    Math.hypot(f.centroid[0] - pendingTag.centroid[0], f.centroid[1] - pendingTag.centroid[1]) > 0.5);
+  pendingTag = null; draw(); noding();
+  feedback("tag cleared.");
+});
+
+// ── drafts ─────────────────────────────────────────────────────────────
+async function refreshList(){
+  const list = await (await fetch(API + "/templates/graph/drafts")).json();
+  document.getElementById("drafts").innerHTML =
+    (list || []).map(n => `<li data-n="${n}">${n}</li>`).join("") || "<li><i>(none)</i></li>";
+  document.querySelectorAll("#drafts li").forEach(li => li.addEventListener("click", async () => {
+    const r = await fetch(API + "/templates/graph/drafts/" + li.dataset.n);
+    if (!r.ok){ feedback("load failed."); return; }
+    const d = await r.json();
+    draft = Object.assign(d, { _faces: [] });
+    fName.value = d.name; fDescr.value = d.description || "";
+    fEx.value = d.envelope.x1; fEy.value = d.envelope.y1; fGrid.value = d.grid;
+    draw(); noding(); feedback("loaded " + d.name);
+  }));
+}
+document.getElementById("btnSave").addEventListener("click", async () => {
+  readDraft();
+  const r = await fetch(API + "/templates/graph/drafts/" + draft.name, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  const j = await r.json();
+  feedback("saved " + draft.name + ((j.errors || []).length ? "\nerrors:\n" + j.errors.join("\n") : "\nclean") );
+  refreshList();
+});
+document.getElementById("btnRefresh").addEventListener("click", refreshList);
+document.getElementById("btnPreview").addEventListener("click", async () => {
+  readDraft();
+  const r = await fetch(API + "/templates/graph/preview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  if (!r.ok){ feedback("render failed: HTTP " + r.status); return; }
+  document.getElementById("preview").innerHTML =
+    (await r.text()).replace("<svg ", '<svg style="width:100%" ');
+});
+document.getElementById("btnDelDraft").addEventListener("click", () => {
+  feedback("deleting drafts: use the file store dir for now (wip toolhouse).");
+});
+function feedback(msg){ document.getElementById("feedback").textContent = msg; }
+
+[fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding(); }));
+window.addEventListener("resize", () => draw());
+
+const demo = new URLSearchParams(location.search).has("demo");
+if (demo){
+  draft.segments = [
+    { x0: 0, y0: 0, x1: 40, y1: 0 }, { x0: 40, y0: 0, x1: 40, y1: 26 },
+    { x0: 40, y0: 26, x1: 0, y1: 26 }, { x0: 0, y0: 26, x1: 0, y1: 0 },
+    { x0: 0, y0: 10, x1: 40, y1: 10 },
+  ];
+  draft.edges = { "0": "facade", "1": "facade", "2": "facade", "3": "facade" };
+  draft.faces = [
+    { key: "living", label: "living", items: ["*-woon"], area_min: 20, area_max: 30, centroid: [20, 18] },
+    { key: "wet", label: "wet", items: ["*-bad", "keuken.*"], area_min: 10, area_max: 14, centroid: [20, 5] },
+  ];
+}
+readDraft(); draw(); noding();
+</script>
+</body>
+</html>

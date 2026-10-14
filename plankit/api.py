@@ -21,6 +21,7 @@ from plankit.program import RoomProgram
 from plankit.store import VariantStore, make_variant
 from plankit.svg import geometry_view, to_svg
 from plankit.templates import TemplateDraft, TemplateStore
+from plankit.wallgraph import WallGraphDraft, WallGraphStore, draft_preview_svg
 
 
 class GenerateRequest(BaseModel):
@@ -184,6 +185,58 @@ def create_app(
             out["covered"] = covered
             out["uncovered"] = uncovered
         return out
+
+    # ── wall-graph canvas (dev feature: template = a drawing) ─────
+
+    wstore = WallGraphStore(str(tstore.dir))
+
+    @app.get("/templates/graph/canvas")
+    def wallgraph_canvas():
+        """Serve the wall-graph sketch page (polyline drawing front-end)."""
+        page = (
+            Path(__file__).resolve().parents[1]
+            / "frontend"
+            / "canvas"
+            / "wall_canvas.html"
+        )
+        return FileResponse(str(page), media_type="text/html")
+
+    @app.post("/templates/graph/noding")
+    def wallgraph_noding(req: DraftRequest):
+        """Node the drawn segments (shapely) → bounded faces + tag match."""
+        d = WallGraphDraft.from_dict(req.draft)
+        try:
+            faces = d.noded_faces()
+        except Exception as exc:  # shapely missing or degenerate strokes
+            raise HTTPException(
+                status_code=503, detail=f"noding failed: {exc}"
+            ) from exc
+        return {"faces": faces, "errors": d.validate()}
+
+    @app.post("/templates/graph/preview")
+    def wallgraph_preview(req: DraftRequest):
+        """SVG render of the drawing (strokes, face shading, edge tags)."""
+        d = WallGraphDraft.from_dict(req.draft)
+        return Response(draft_preview_svg(d), media_type="image/svg+xml")
+
+    @app.post("/templates/graph/drafts/{name}")
+    def wallgraph_save(name: str, req: DraftRequest):
+        d = WallGraphDraft.from_dict(req.draft)
+        errors = d.validate()
+        wstore.save(name, d)
+        return {"saved": name, "errors": errors}
+
+    @app.get("/templates/graph/drafts/{name}")
+    def wallgraph_get(name: str):
+        try:
+            return wstore.load_wallgraph(name).to_dict()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/templates/graph/drafts")
+    def wallgraph_list():
+        """Names of the wallgraph drafts (other canvas keeps its own)."""
+        return wstore.list()
 
     return app
 
