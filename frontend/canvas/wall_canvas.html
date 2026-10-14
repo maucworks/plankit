@@ -105,7 +105,14 @@
     </div>
     <ul id="drafts"></ul>
     <div class="row">
-      <button id="btnPreview">🖼 server render</button>
+      <button id="btnSolve">📐 solve m²</button>
+      <button id="btnApply">⤓ apply solution</button>
+    </div>
+    <div class="row">
+      <button id="btnClearSolved">✕ clear solution</button>
+      <button id="btnPreview">🖼 render</button>
+    </div>
+    <div class="row">
       <button id="btnDelDraft">🗑 delete named</button>
     </div>
     <div id="preview"></div>
@@ -190,6 +197,30 @@ function draw(){
     parts.push(`<circle class="vert" data-pt="${k}" data-segs="${idxList.join(",")}" cx="${fmt(vx)}" cy="${fmt(vy)}"/>`);
   }
   parts.push('<line id="rubber" class="rubber" style="display:none"/>');
+  const solved = draft._solved || null;
+  if (solved && solved.junctions){
+    const S = new Map(solved.junctions.map(j => [j.orig.join(","), j.solved]));
+    const okCount = (solved.faces || []).filter(f => f.ok).length;
+    for (const seg of draft.segments){
+      const a = S.get([seg.x0, seg.y0].join(",")), b = S.get([seg.x1, seg.y1].join(","));
+      if (!a || !b) continue;
+      const [ax, ay] = m2vb(a[0], a[1]), [bx, by] = m2vb(b[0], b[1]);
+      parts.push(`<line x1="${fmt(ax)}" y1="${fmt(ay)}" x2="${fmt(bx)}" y2="${fmt(by)}"
+        stroke="#1d4ed8" stroke-width="1.5" stroke-dasharray="7 4" opacity="0.95"/>`);
+    }
+    for (const f of (solved.faces || [])){
+      const [cx, cy] = m2vb(f.centroid_solved ? f.centroid_solved[0] : 0, f.centroid_solved ? f.centroid_solved[1] : 0);
+      const mark = f.ok ? "✓" : "✗";
+      const col = f.ok ? "#059669" : "#dc2626";
+      const band = f.band && f.band[0] !== null ? ` (${fmt(f.band[0])}–${fmt(f.band[1])})` : "";
+      parts.push(`<text x="${cx}" y="${cy - 22}" text-anchor="middle" font-size="11" fill="${col}"
+        style="paint-order:stroke" stroke="#fff" stroke-width="3" font-weight="bold">
+        ${f.label || f.key || "?"} ${mark} ${fmt(f.area)} m2</text>`);
+      parts.push(`<text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="10" fill="${col}"
+         style="paint-order:stroke" stroke="#fff" stroke-width="3">band${band}</text>`);
+    }
+    parts.push(`<text x="16" y="18" font-size="12" fill="#1d4ed8">solved: ${okCount}/${(solved.faces || []).length} regions in band — blue dashed = solved strokes</text>`);
+  }
   parts.push('<g id="snapfx" pointer-events="none"></g>');
   svg.innerHTML = parts.join("");
   bindLayer();
@@ -562,9 +593,42 @@ document.getElementById("btnPreview").addEventListener("click", async () => {
 document.getElementById("btnDelDraft").addEventListener("click", () => {
   feedback("deleting drafts: use the file store dir for now (wip toolhouse).");
 });
+async function solveDraft(){
+  readDraft();
+  const r = await fetch(API + "/templates/graph/solve", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  if (!r.ok){ const j = await r.json().catch(() => ({})); feedback("solve failed: " + (j.detail || r.status)); return; }
+  const j = await r.json();
+  draft._solved = (j.status && j.junctions) ? { junctions: j.junctions, faces: j.faces } : null;
+  const hits = (j.faces || []).filter(f => f.ok).length;
+  feedback((j.status || "?") +
+    (j.errors && j.errors.length ? "\nerrors:\n" + j.errors.join("\n") : "") +
+    "\nregions in band: " + hits + "/" + (j.faces || []).length +
+    (j.faces || []).map(f => `\n  ${(f.label || f.key || "untagged")}: ${fmt(f.area)} m2` +
+      (f.ok ? "" : ` — band ${f.band ? fmt(f.band[0]) + ".." + fmt(f.band[1]) : "none"}`)) +
+    "\nblue dashed = solved sketch; ⤓ apply writes it into the draft.");
+  draw();
+}
+document.getElementById("btnSolve").addEventListener("click", solveDraft);
+document.getElementById("btnApply").addEventListener("click", () => {
+  const solved = draft._solved;
+  if (!solved){ feedback("solve first."); return; }
+  const S = new Map(solved.junctions.map(j => [j.orig.join(","), j.solved]));
+  draft.segments = draft.segments.map(seg => {
+    const a = S.get([seg.x0, seg.y0].join(",")), b = S.get([seg.x1, seg.y1].join(","));
+    return a && b ? { x0: fmt(a[0]), y0: fmt(a[1]), x1: fmt(b[0]), y1: fmt(b[1]) } : seg;
+  });
+  draft._solved = null;
+  draw(); noding();
+  feedback("solution applied to the draft — bands should read ✓ on a re-solve.");
+});
+document.getElementById("btnClearSolved").addEventListener("click", () => {
+  draft._solved = null; draw(); feedback("solution overlay cleared.");
+});
 function feedback(msg){ document.getElementById("feedback").textContent = msg; }
 
-[fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding(); }));
+[fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding();
+if (demo) solveDraft(); }));
 window.addEventListener("resize", () => draw());
 
 const demo = new URLSearchParams(location.search).has("demo");
@@ -576,11 +640,12 @@ if (demo){
   ];
   draft.edges = { "0": "facade", "1": "facade", "2": "facade", "3": "facade" };
   draft.faces = [
-    { key: "living", label: "living", items: ["*-woon"], area_min: 20, area_max: 30, centroid: [20, 18] },
-    { key: "wet", label: "wet", items: ["*-bad", "keuken.*"], area_min: 10, area_max: 14, centroid: [20, 5] },
+    { key: "living", label: "living", items: ["*-woon"], area_min: 640, area_max: 680, centroid: [20, 18] },
+    { key: "wet", label: "wet", items: ["*-bad", "keuken.*"], area_min: 370, area_max: 390, centroid: [20, 5] },
   ];
 }
 readDraft(); draw(); noding();
+if (demo) solveDraft();
 </script>
 </body>
 </html>

@@ -48,7 +48,9 @@ def _require_connected(graph: Graph) -> None:
 def total_depth(graph: Graph) -> dict[str, float]:
     """Totale diepte per knoop (som van korte-padlengtes naar alle anderen)."""
     _require_connected(graph)
-    return {node: float(sum(_distances(graph, node).values())) for node in graph.nodes()}
+    return {
+        node: float(sum(_distances(graph, node).values())) for node in graph.nodes()
+    }
 
 
 def mean_depth(graph: Graph) -> dict[str, float]:

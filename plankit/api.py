@@ -21,6 +21,7 @@ from plankit.program import RoomProgram
 from plankit.store import VariantStore, make_variant
 from plankit.svg import geometry_view, to_svg
 from plankit.templates import TemplateDraft, TemplateStore
+from plankit.wallsolve import solve_areas
 from plankit.wallgraph import WallGraphDraft, WallGraphStore, draft_preview_svg
 
 
@@ -218,6 +219,15 @@ def create_app(
         """SVG render of the drawing (strokes, face shading, edge tags)."""
         d = WallGraphDraft.from_dict(req.draft)
         return Response(draft_preview_svg(d), media_type="image/svg+xml")
+
+    @app.post("/templates/graph/solve")
+    def wallgraph_solve(req: DraftRequest):
+        """Rubber-band solve: junction coordinates so face areas hit their bands."""
+        d = WallGraphDraft.from_dict(req.draft)
+        try:
+            return solve_areas(d)
+        except Exception as exc:  # malformed draft, ortools hiccup
+            raise HTTPException(status_code=503, detail=f"solve failed: {exc}") from exc
 
     @app.post("/templates/graph/drafts/{name}")
     def wallgraph_save(name: str, req: DraftRequest):

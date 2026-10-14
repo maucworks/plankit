@@ -43,13 +43,17 @@ def test_program_space_rejects_unknown_role():
 
 
 def test_program_space_role_roundtrip():
-    program = RoomProgram(nodes={"g": ProgramSpace(name="Gang", role="verkeer")}, edges=[])
+    program = RoomProgram(
+        nodes={"g": ProgramSpace(name="Gang", role="verkeer")}, edges=[]
+    )
     restored = RoomProgram.from_dict(program.to_dict())
     assert restored.nodes["g"].role == "verkeer"
 
 
 def test_program_space_entrance_roundtrip():
-    program = RoomProgram(nodes={"h": ProgramSpace(name="Hal", entrance=True)}, edges=[])
+    program = RoomProgram(
+        nodes={"h": ProgramSpace(name="Hal", entrance=True)}, edges=[]
+    )
     restored = RoomProgram.from_dict(program.to_dict())
     assert restored.nodes["h"].entrance is True
 

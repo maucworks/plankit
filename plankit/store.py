@@ -115,13 +115,16 @@ class VariantStore:
 
     def get(self, vid: str) -> Variant | None:
         with self._lock:
-            row = self._conn.execute("SELECT * FROM variants WHERE id=?", (vid,)).fetchone()
+            row = self._conn.execute(
+                "SELECT * FROM variants WHERE id=?", (vid,)
+            ).fetchone()
         return self._from_row(row) if row else None
 
     def children(self, parent_id: str) -> list[Variant]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM variants WHERE parent_id=? ORDER BY step, id", (parent_id,)
+                "SELECT * FROM variants WHERE parent_id=? ORDER BY step, id",
+                (parent_id,),
             ).fetchall()
         return [self._from_row(r) for r in rows]
 
@@ -134,7 +137,9 @@ class VariantStore:
 
     def all(self) -> list[Variant]:
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM variants ORDER BY step, id").fetchall()
+            rows = self._conn.execute(
+                "SELECT * FROM variants ORDER BY step, id"
+            ).fetchall()
         return [self._from_row(r) for r in rows]
 
     def filter(self, predicate) -> list[Variant]:

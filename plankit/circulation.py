@@ -89,8 +89,15 @@ def corridor_backbone(
     for fid in sorted(parent):
         length, seg = graph[parent[fid]][fid]
         links.append(
-            BackboneLink(a=parent[fid], b=fid, length=length,
-                         x1=seg[0], y1=seg[1], x2=seg[2], y2=seg[3])
+            BackboneLink(
+                a=parent[fid],
+                b=fid,
+                length=length,
+                x1=seg[0],
+                y1=seg[1],
+                x2=seg[2],
+                y2=seg[3],
+            )
         )
     links.sort(key=lambda link: (link.a, link.b))
     return CorridorBackbone(root=root, links=links)
@@ -167,8 +174,11 @@ def propose_doors(sd: PlanarSubdivision) -> list[tuple[int, int]]:
     proposals: list[tuple[int, int]] = []
     while True:
         cands = sorted(
-            ((length, pair) for pair, length in walls.items()
-             if find(pair[0]) != find(pair[1])),
+            (
+                (length, pair)
+                for pair, length in walls.items()
+                if find(pair[0]) != find(pair[1])
+            ),
             key=lambda t: (-t[0], t[1]),
         )
         if not cands:

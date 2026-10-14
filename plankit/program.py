@@ -65,7 +65,9 @@ class ProgramSpace:
 
     def __post_init__(self) -> None:
         if self.role not in SPACE_ROLES:
-            raise ValueError(f"onbekende rol {self.role!r}; verwacht een van {SPACE_ROLES}")
+            raise ValueError(
+                f"onbekende rol {self.role!r}; verwacht een van {SPACE_ROLES}"
+            )
 
 
 @dataclass
@@ -91,7 +93,9 @@ class ProgramEdge:
 
     def __post_init__(self) -> None:
         if self.kind not in EDGE_KINDS:
-            raise ValueError(f"onbekend kanttype {self.kind!r}; verwacht een van {EDGE_KINDS}")
+            raise ValueError(
+                f"onbekend kanttype {self.kind!r}; verwacht een van {EDGE_KINDS}"
+            )
 
 
 @dataclass

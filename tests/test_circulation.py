@@ -34,7 +34,9 @@ def test_backbone_explicit_root():
 
 
 def test_backbone_single_room_empty():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]]
+    )
     bb = corridor_backbone(sd)
     assert bb.links == []
 

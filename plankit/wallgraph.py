@@ -149,6 +149,7 @@ class WallGraphDraft:
                     "area": round(area, 3),
                     "centroid": [round(cx, 3), round(cy, 3)],
                     "verts": [[round(v[0], 3), round(v[1], 3)] for v in verts],
+                    "key": (tag or {}).get("key"),
                     "label": (tag or {}).get("label", ""),
                     "items": (tag or {}).get("items", []),
                     "area_min": (tag or {}).get("area_min"),
