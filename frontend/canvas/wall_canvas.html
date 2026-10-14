@@ -1048,9 +1048,10 @@ svg.addEventListener("pointermove", ev => {
     }
   }
 });
-svg.addEventListener("pointermove", ev => {
+window.addEventListener("pointermove", ev => {   // window-level: grip survives leaving the canvas
   if ((tool === "vertex" || tool === "edit") && vertexDrag){
     withFrame(() => {
+      if (!vertexDrag) return;              // pointerup already settled
       const [mx, my] = meters(ev, false);
       if (Math.abs(mx - vertexDrag.work[0]) < 0.05 && Math.abs(my - vertexDrag.work[1]) < 0.05) return;
       const o = vertexDrag.orig;
@@ -1074,9 +1075,10 @@ svg.addEventListener("pointermove", ev => {
     });
   }
 });
-svg.addEventListener("pointermove", ev => {
+window.addEventListener("pointermove", ev => {
   if (tool === "edit" && edgeDrag){
     withFrame(() => {
+      if (!edgeDrag) return;                // pointerup already settled
       const [mx, my] = meters(ev, false);
       const ed = edgeDrag, orig = ed.orig, curLive = draft.segments[ed.idx];
       if (ed.axis === "horizontal"){
@@ -1093,7 +1095,7 @@ svg.addEventListener("pointermove", ev => {
     });
   }
 });
-svg.addEventListener("pointerup", ev => {
+window.addEventListener("pointerup", ev => {
   if ((tool === "vertex" || tool === "edit") && vertexDrag){
 
     // drop bindings the moved joint no longer satisfies
@@ -1116,7 +1118,7 @@ svg.addEventListener("pointerup", ev => {
     feedback("joint moved — live solution refreshed.");
   }
 });
-svg.addEventListener("pointerup", ev => {
+window.addEventListener("pointerup", ev => {
   if (tool === "edit" && edgeDrag){
     edgeDrag = null;
     draw(); noding();
@@ -1219,6 +1221,7 @@ svg.addEventListener("click", ev => {
 });
 svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
 svg.addEventListener("pointercancel", clearDragState);
+window.addEventListener("pointercancel", clearDragState);
 svg.addEventListener("lostpointercapture", ev => { if (!edgeDrag) clearDragState(); });
 
 // ── tolerant edit-mode vertex drag (root handler, survives narrow dots) ─
