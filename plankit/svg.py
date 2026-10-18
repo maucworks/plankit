@@ -7,7 +7,16 @@ import json
 
 from plankit.planar import PlanarSubdivision
 
-_PALETTE = ["#e8f0fe", "#fce8e6", "#e6f4ea", "#fef7e0", "#f3e8fd", "#e0f7fa", "#fff3e0", "#ede7f6"]
+_PALETTE = [
+    "#e8f0fe",
+    "#fce8e6",
+    "#e6f4ea",
+    "#fef7e0",
+    "#f3e8fd",
+    "#e0f7fa",
+    "#fff3e0",
+    "#ede7f6",
+]
 
 _HTML = """<!doctype html>
 <html><head><meta charset="utf-8"><title>plankit scrub</title>
@@ -88,7 +97,11 @@ def to_svg(sd: PlanarSubdivision, width: int = 640, height: int = 480) -> str:
             f'<text x="{sx(cx):.1f}" y="{sy(cy):.1f}" text-anchor="middle" '
             f'font-size="12" fill="#222">{label}</text>'
         )
-    return f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">' + "".join(parts) + "</svg>"
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">'
+        + "".join(parts)
+        + "</svg>"
+    )
 
 
 def scrub_page(variants, width: int = 640, height: int = 480) -> str:

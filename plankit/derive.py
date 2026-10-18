@@ -120,7 +120,11 @@ def wall_segments(sd: PlanarSubdivision, program=None) -> list[WallSegment]:
         edge_label = None
         if program is not None:
             for edge in program.edges:
-                kinds = {"buitengevel": ("facade",), "doorgang": ("door",), "scheidend": ("wall",)}
+                kinds = {
+                    "buitengevel": ("facade",),
+                    "doorgang": ("door",),
+                    "scheidend": ("wall",),
+                }
                 if edge.kind not in kinds[function]:
                     continue
                 pair = {edge.a, edge.b}
@@ -134,8 +138,15 @@ def wall_segments(sd: PlanarSubdivision, program=None) -> list[WallSegment]:
                     break
         out.append(
             WallSegment(
-                a=la, b=lb, x1=a.x, y1=a.y, x2=b.x, y2=b.y,
-                length=length, function=function, edge=edge_label,
+                a=la,
+                b=lb,
+                x1=a.x,
+                y1=a.y,
+                x2=b.x,
+                y2=b.y,
+                length=length,
+                function=function,
+                edge=edge_label,
             )
         )
     return out

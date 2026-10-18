@@ -34,7 +34,9 @@ def test_conform_satisfied():
 
 
 def test_conform_missing():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]]
+    )
     sd.faces[0].label = "k"
     r = conform(sd, _two_room())
     assert "space:w" in r.missing
@@ -43,7 +45,9 @@ def test_conform_missing():
 
 def test_conform_area_violation():
     prog = RoomProgram(nodes={"k": ProgramSpace(name="1.01", area_min=100)}, edges=[])
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (4.0, 0.0), (4.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (4.0, 0.0), (4.0, 6.0), (0.0, 6.0)]]
+    )
     sd.faces[0].label = "k"
     r = conform(sd, prog)
     assert any("area<100" in v for v in r.violated)
@@ -202,7 +206,9 @@ def test_conform_missing_adj_empty_when_ok():
 
 
 def test_conform_missing_adj_skips_unplaced():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]]
+    )
     sd.faces[0].label = "k"
     prog = RoomProgram(
         nodes={

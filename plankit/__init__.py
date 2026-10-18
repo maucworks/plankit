@@ -46,7 +46,13 @@ from plankit.derive import (
     wall_segments,
 )
 from plankit.events import evaluate
-from plankit.generate import generate, generate_many, propose_layout, revise, select_best
+from plankit.generate import (
+    generate,
+    generate_many,
+    propose_layout,
+    revise,
+    select_best,
+)
 from plankit.geometry import Vec
 from plankit.graph import Graph
 from plankit.hierarchy import (

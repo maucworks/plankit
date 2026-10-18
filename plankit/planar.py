@@ -29,18 +29,18 @@ class Vertex:
 
 @dataclass
 class HalfEdge:
-    origin: int          # vertex index
-    twin: int            # half-edge index
-    next: int            # half-edge index (CCW around face)
-    face: int            # face index
-    kind: str = "wall"   # "wall" | "door" | "facade"
+    origin: int  # vertex index
+    twin: int  # half-edge index
+    next: int  # half-edge index (CCW around face)
+    face: int  # face index
+    kind: str = "wall"  # "wall" | "door" | "facade"
 
 
 @dataclass
 class Face:
-    half_edge: int       # one incident half-edge index
+    half_edge: int  # one incident half-edge index
     exterior: bool = False
-    label: str = ""      # ruimte-sleutel (PvE) of "" bij exterior/onbekend
+    label: str = ""  # ruimte-sleutel (PvE) of "" bij exterior/onbekend
 
 
 class PlanarSubdivision:
@@ -59,7 +59,9 @@ class PlanarSubdivision:
     # ----- constructie -----
 
     @classmethod
-    def from_faces(cls, polygons: list[list[tuple[float, float]]]) -> "PlanarSubdivision":
+    def from_faces(
+        cls, polygons: list[list[tuple[float, float]]]
+    ) -> "PlanarSubdivision":
         """Bouw een subdivisie uit begrensde faces (CCW-polygonen).
 
         De exterior face wordt automatisch toegevoegd; grens-edges (niet gedeeld
@@ -103,7 +105,9 @@ class PlanarSubdivision:
             if rev is not None:
                 he.twin = rev
             else:
-                ext = HalfEdge(origin=dest, twin=he_id, next=-1, face=exterior_id, kind="facade")
+                ext = HalfEdge(
+                    origin=dest, twin=he_id, next=-1, face=exterior_id, kind="facade"
+                )
                 ext_id = len(sd.half_edges)
                 sd.half_edges.append(ext)
                 he.twin = ext_id
@@ -163,7 +167,10 @@ class PlanarSubdivision:
 
     def face_vertices(self, face_id: int) -> list[tuple[float, float]]:
         return [
-            (self.vertices[self.half_edges[he].origin].x, self.vertices[self.half_edges[he].origin].y)
+            (
+                self.vertices[self.half_edges[he].origin].x,
+                self.vertices[self.half_edges[he].origin].y,
+            )
             for he in self.face_half_edges(face_id)
         ]
 
@@ -176,6 +183,31 @@ class PlanarSubdivision:
             x1, y1 = pts[(i + 1) % n]
             s += x0 * y1 - x1 * y0
         return abs(s) / 2.0
+
+    def face_centroid(self, face_id: int) -> tuple[float, float]:
+        """Area-weighted polygon centroid of a face.
+
+        The vertex *average* is not a centroid: splitting a rectangle with
+        one T-junction adds two collinear vertices and drags the average
+        of a long wall sideways, which is enough to lose a face tag when
+        the drawing is noded differently. This is the real centroid, with
+        the vertex mean as the fallback for a degenerate loop.
+        """
+        pts = self.face_vertices(face_id)
+        n = len(pts)
+        if n == 0:
+            return (0.0, 0.0)
+        s = cx = cy = 0.0
+        for i in range(n):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % n]
+            cross = x0 * y1 - x1 * y0
+            s += cross
+            cx += (x0 + x1) * cross
+            cy += (y0 + y1) * cross
+        if abs(s) < 1e-12:
+            return (sum(p[0] for p in pts) / n, sum(p[1] for p in pts) / n)
+        return (cx / (3.0 * s), cy / (3.0 * s))
 
     def perimeter_faces(self) -> set[int]:
         ext = self.exterior_face()
@@ -238,7 +270,11 @@ class PlanarSubdivision:
         sd = cls()
         sd.vertices = [Vertex(v["x"], v["y"]) for v in data["vertices"]]
         sd.faces = [
-            Face(half_edge=f["half_edge"], exterior=f["exterior"], label=f.get("label", ""))
+            Face(
+                half_edge=f["half_edge"],
+                exterior=f["exterior"],
+                label=f.get("label", ""),
+            )
             for f in data["faces"]
         ]
         sd.half_edges = [

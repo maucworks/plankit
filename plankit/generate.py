@@ -79,7 +79,10 @@ def generate(
         for key, rect in proposal.items():
             xs = [_xy(p)[0] for p in rect]
             ys = [_xy(p)[1] for p in rect]
-            if min(xs) - _EPS < cx < max(xs) + _EPS and min(ys) - _EPS < cy < max(ys) + _EPS:
+            if (
+                min(xs) - _EPS < cx < max(xs) + _EPS
+                and min(ys) - _EPS < cy < max(ys) + _EPS
+            ):
                 if key not in best or area > best[key][0]:
                     best[key] = (area, fid)
                 break
@@ -144,7 +147,9 @@ def generate_many(
 
             store.add(make_variant(sd, program, step=n, label=f"{strategy}/s{seed}"))
     best = select_best(program, sds, boundary=boundary, min_widths=min_widths)
-    return sds[best], conform(sds[best], program, boundary=boundary, min_widths=min_widths)
+    return sds[best], conform(
+        sds[best], program, boundary=boundary, min_widths=min_widths
+    )
 
 
 def revise(
@@ -193,7 +198,9 @@ def revise(
         idx = select_best(program, sds, boundary=boundary, min_widths=min_widths)
         best_prop = cands[idx]
         best_sd = sds[idx]
-        best_report = conform(best_sd, program, boundary=boundary, min_widths=min_widths)
+        best_report = conform(
+            best_sd, program, boundary=boundary, min_widths=min_widths
+        )
         if best_report.ok:
             break
     return best_prop, best_report

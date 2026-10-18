@@ -48,10 +48,14 @@ def shape_for_area(
     if area <= 0:
         raise ValueError(f"shape_for_area: area moet positief zijn, got {area!r}")
     if max_aspect < 1:
-        raise ValueError(f"shape_for_area: max_aspect moet >= 1 zijn, got {max_aspect!r}")
+        raise ValueError(
+            f"shape_for_area: max_aspect moet >= 1 zijn, got {max_aspect!r}"
+        )
     if min_width is not None:
         if min_width <= 0:
-            raise ValueError(f"shape_for_area: min_width moet positief zijn, got {min_width!r}")
+            raise ValueError(
+                f"shape_for_area: min_width moet positief zijn, got {min_width!r}"
+            )
         if area < min_width * min_width:
             return (min_width, min_width)
         max_aspect = min(max_aspect, area / (min_width * min_width))
@@ -89,7 +93,9 @@ def place_space(
     hi = space.area_max
     if w is not None and d is not None:
         if w <= 0 or d <= 0:
-            raise ValueError(f"place_space: w en d moeten positief zijn, got {w!r}, {d!r}")
+            raise ValueError(
+                f"place_space: w en d moeten positief zijn, got {w!r}, {d!r}"
+            )
         area = w * d
         if area < lo - _TOL or (hi is not None and area > hi + _TOL):
             raise ValueError(
@@ -108,7 +114,9 @@ def place_space(
     return _rect_points(x0, y0, x0 + w, y0 + d)
 
 
-def split_footprint(points: list[Vec], axis: str, at: float) -> tuple[list[Vec], list[Vec]]:
+def split_footprint(
+    points: list[Vec], axis: str, at: float
+) -> tuple[list[Vec], list[Vec]]:
     """Splits een rechthoekige footprint langs ``x=at`` of ``y=at``."""
     rect = _rect_of(points)
     if rect is None:
@@ -184,7 +192,14 @@ def layout_row(
             raise ValueError(f"layout_row: {key!r} heeft geen area_min")
         w = space.area_min / depth
         out[key] = place_space(
-            program, key, x, y0, w=w, d=depth, max_aspect=max_aspect, min_width=min_width
+            program,
+            key,
+            x,
+            y0,
+            w=w,
+            d=depth,
+            max_aspect=max_aspect,
+            min_width=min_width,
         )
         x += w + gap
     return out
@@ -361,7 +376,9 @@ def propose_magnet(
             orientations = (True, False)  # beide proberen: passing in de envelop
         if not rects:
             landscape = orientations[0]
-            w, h = shape_for_area(area, max_aspect, landscape=landscape, min_width=min_width)
+            w, h = shape_for_area(
+                area, max_aspect, landscape=landscape, min_width=min_width
+            )
             if bounds is not None and attractors is not None and key in attractors:
                 ax, ay = attractors[key]
                 corners = [
@@ -386,7 +403,9 @@ def propose_magnet(
             best_rect: tuple[float, float, float, float] | None = None
             best_score = -1.0
             for landscape in orientations:
-                w, h = shape_for_area(area, max_aspect, landscape=landscape, min_width=min_width)
+                w, h = shape_for_area(
+                    area, max_aspect, landscape=landscape, min_width=min_width
+                )
                 for other in rects.values():
                     for ox, oy in _anchors(other, w, h):
                         cand = (ox, oy, ox + w, oy + h)
@@ -400,12 +419,16 @@ def propose_magnet(
                             best_rect = cand
             if best_rect is None and bounds is not None:
                 for landscape in orientations:
-                    w, h = shape_for_area(area, max_aspect, landscape=landscape, min_width=min_width)
+                    w, h = shape_for_area(
+                        area, max_aspect, landscape=landscape, min_width=min_width
+                    )
                     best_rect = free_inside(w, h)
                     if best_rect is not None:
                         break
             if best_rect is None:  # volgebouwd: rechts van de bbox plakken
-                w, h = shape_for_area(area, max_aspect, landscape=orientations[0], min_width=min_width)
+                w, h = shape_for_area(
+                    area, max_aspect, landscape=orientations[0], min_width=min_width
+                )
                 x = max(r[2] for r in rects.values())
                 best_rect = (x, 0.0, x + w, h)
             rect = best_rect
@@ -431,12 +454,12 @@ def squarify_rects(
     fixeren zodra toevoegen verslechtert (`worst()`). Deterministisch; exacte
     oppervlakten; betegeling zonder gaten (op float-epsilon na).
     """
-    children = sorted(
-        ((k, float(a)) for k, a in items), key=lambda kv: -kv[1]
-    )
+    children = sorted(((k, float(a)) for k, a in items), key=lambda kv: -kv[1])
     for key, area in children:
         if area <= 0:
-            raise ValueError(f"squarify_rects: area moet positief zijn, got {key!r}={area!r}")
+            raise ValueError(
+                f"squarify_rects: area moet positief zijn, got {key!r}={area!r}"
+            )
     out: dict[str, tuple[float, float, float, float]] = {}
     x0, y0, x1, y1 = rect
     row: list[tuple[str, float]] = []
@@ -504,9 +527,7 @@ def move_room(
     return out
 
 
-def swap_rooms(
-    proposal: dict[str, list[Vec]], a: str, b: str
-) -> dict[str, list[Vec]]:
+def swap_rooms(proposal: dict[str, list[Vec]], a: str, b: str) -> dict[str, list[Vec]]:
     """Wissel de oorsprong van twee kamers (eigen maat behouden); puur."""
     for key in (a, b):
         if key not in proposal:
@@ -558,7 +579,12 @@ def move_toward(
     step_dx, step_dy = dx / 8.0, dy / 8.0
     best = (0.0, 0.0)
     for i in range(1, 9):
-        cand = (ax0 + step_dx * i, ay0 + step_dy * i, ax1 + step_dx * i, ay1 + step_dy * i)
+        cand = (
+            ax0 + step_dx * i,
+            ay0 + step_dy * i,
+            ax1 + step_dx * i,
+            ay1 + step_dy * i,
+        )
         blocked = False
         for pts in others:
             ox0 = min(_xy(p)[0] for p in pts)

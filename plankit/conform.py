@@ -74,7 +74,9 @@ def conform(
     """
     graph = space_adjacency(sd)
     perimeter = perimeter_spaces(sd)
-    face_by_key = {f.label: i for i, f in enumerate(sd.faces) if not f.exterior and f.label}
+    face_by_key = {
+        f.label: i for i, f in enumerate(sd.faces) if not f.exterior and f.label
+    }
     exterior_nodes = {key for key, space in program.nodes.items() if space.exterior}
     report = ConformanceReport()
 
@@ -83,7 +85,9 @@ def conform(
             continue
         fid = face_by_key.get(key)
         if fid is None:
-            (report.missing if space.required else report.unconstrained).append(f"space:{key}")
+            (report.missing if space.required else report.unconstrained).append(
+                f"space:{key}"
+            )
             continue
         area = sd.face_area(fid)
         if space.area_min is not None and area < space.area_min - _TOL:
@@ -224,7 +228,9 @@ def _default_root(program: RoomProgram) -> str | None:
     return next(iter(program.nodes), None)
 
 
-def validate_circulation(program: RoomProgram, root: str | None = None) -> CirculationReport:
+def validate_circulation(
+    program: RoomProgram, root: str | None = None
+) -> CirculationReport:
     """Toets de verkeersstructuur van een PvE op de access-graaf (``door``-kanten).
 
     Controleert dat elke vereiste, niet-exterieure ruimte bereikbaar is vanaf de
@@ -241,7 +247,9 @@ def validate_circulation(program: RoomProgram, root: str | None = None) -> Circu
 
     if root is None or not access.has_node(root):
         report.unreachable = sorted(
-            key for key, space in program.nodes.items() if space.required and not space.exterior
+            key
+            for key, space in program.nodes.items()
+            if space.required and not space.exterior
         )
         return report
 

@@ -61,7 +61,9 @@ def facade_lengths(sd: PlanarSubdivision) -> dict[str, float]:
     return out
 
 
-def circulation_depth(sd: PlanarSubdivision, root: str | None = None) -> dict[str, float]:
+def circulation_depth(
+    sd: PlanarSubdivision, root: str | None = None
+) -> dict[str, float]:
     """Diepte vanaf *root* over de access-graaf (circulatie-efficiëntie)."""
     from collections import deque
 
@@ -147,9 +149,7 @@ def facade_ratio(sd: PlanarSubdivision) -> float:
     return sum(facade_lengths(sd).values()) / total_area
 
 
-def escape_depth(
-    sd: PlanarSubdivision, program: "RoomProgram"
-) -> dict[str, float]:
+def escape_depth(sd: PlanarSubdivision, program: "RoomProgram") -> dict[str, float]:
     """Loopafstand (deur-stappen) per ruimte tot de dichtstbijzijnde kern.
 
     Kern = face met label van een `core`-knoop. Zonder geplaatste kern leeg.

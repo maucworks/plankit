@@ -1,0 +1,1551 @@
+<!doctype html>
+<!--
+  plankit wall-graph canvas (dev-only): template = a drawing.
+  Draw wall centerlines; the plankit noder nodes them at crossings and
+  T-junctions, closed regions fall out as faces; tag faces (items,
+  area band) and edges (wall/open/access/facade). Same interaction core
+  as the zone canvas: client→viewBox via getScreenCTM, rAF-throttled,
+  page never scrolls. AI-generated file.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>plankit — wall graph canvas</title>
+<style>
+  :root { --line:#374151; --acc:#f97316; --open:#059669; --facade:#9a3412; }
+  html, body { overflow: hidden; height: 100%; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #f5f5f4; }
+  #wrap { display: flex; width: 100%; height: 100vh; overflow: hidden; }
+  #canvasPane { flex: 1 1 62%; overflow: hidden; padding: 12px; display: flex; flex-direction: column; }
+  #panel { flex: 0 0 340px; background: #fff; border-left: 1px solid #e5e7eb; padding: 12px; overflow-y: auto; }
+  svg { background: #fff; border: 1px solid #d1d5db; display: block; width: 100%;
+        max-height: calc(100vh - 140px); touch-action: none; }
+  svg.mode-draw, svg.mode-vertex, svg.mode-etag, svg.mode-face, svg.mode-erase { cursor: crosshair; }
+  svg.mode-edit { cursor: pointer; }
+  button.emode { font: inherit; padding: 2px 8px; border: 1px solid #cbd5e1; background: #fff; border-radius: 4px; cursor: pointer; }
+  button.emode.active { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+  svg.mode-sel  { cursor: default; }
+  h1 { font-size: 16px; margin: 4px 0 8px; }
+  h2 { font-size: 12px; margin: 14px 0 4px; color: #374151; text-transform: uppercase; letter-spacing: .04em; }
+  button { font: inherit; padding: 3px 9px; margin: 1px; border: 1px solid #9ca3af; background: #fff; border-radius: 4px; cursor: pointer; }
+  button.active { background: #111827; color: #fff; border-color: #111827; }
+  button.primary { background: var(--acc); border-color: var(--acc); color: #fff; }
+  label { display: block; font-size: 12px; color: #374151; margin-top: 6px; }
+  input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 3px 6px; border: 1px solid #d1d5db; border-radius: 4px; }
+  .row { display: flex; gap: 6px; } .row > * { flex: 1; min-width: 0; }
+  #feedback { font-size: 12px; white-space: pre-wrap; background: #111827; color: #d1fae5;
+              min-height: 100px; margin-top: 10px; padding: 8px; border-radius: 4px; overflow: auto; max-height: 170px; }
+  #drafts li { cursor: pointer; padding: 2px 0; }
+  #drafts li:hover { color: var(--acc); }
+  .seg { stroke: var(--line); stroke-width: 2.5; }
+  .seg.open { stroke: var(--open); stroke-width: 2; stroke-dasharray: 6 4; }
+  .seg.access { stroke: var(--acc); stroke-width: 2.5; }
+  .seg.facade { stroke: var(--facade); stroke-width: 3; }
+  .seg.hot { stroke: #111827; stroke-width: 3.2; }
+  .vert { fill: #111827; r: 7; cursor: move; }
+  .vert.edit-handle { fill: #1d4ed8; stroke: #ffffff; stroke-width: 2; }
+  .vert.hover-edit { fill: var(--acc); }
+  .vert.hot { fill: var(--acc); r: 9; }
+  .vert.hot { fill: var(--acc); r: 6; }
+  .face-fill { pointer-events: all; cursor: pointer; }
+  .facelabel { font-size: 11px; fill: #111827; pointer-events: none; }
+  .joint { pointer-events: none; }
+  .rubber { stroke: #111827; stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+  .envelope { fill: none; stroke: #cbced6; stroke-width: 3; pointer-events: none; }
+  .helper-line { stroke: #3b82f6; stroke-width: 1.5; stroke-dasharray: 8 5; opacity: 0.65; pointer-events: none; }
+  .helper-line.master-helper { stroke: #2563eb; stroke-width: 2; opacity: 0.85; }
+  .snap-line { stroke: #93c5fd; stroke-width: 2.5; pointer-events: none; }
+  .sel-edge { stroke: #f59e0b; stroke-width: 5; pointer-events: none; opacity: 0.55; }
+  .sel-vert { fill: none; stroke: #f59e0b; stroke-width: 2.5; pointer-events: none; }
+  .dim { stroke: #64748b; stroke-width: 0.8; stroke-dasharray: 2 2; fill: #64748b; font-size: 10px; }
+  .face-name { font-size: 12px; font-weight: 700; fill: #1d4ed8; }
+  .door-mark { pointer-events: none; }
+  .door-label { pointer-events: none; font-weight: 600; }
+  .hint { font-size: 12px; color: #6b7280; margin: 4px 0; min-height: 16px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="canvasPane">
+    <h1>plankit — wall graph canvas <span style="font-size:11px;color:#9ca3af">(template = a drawing)</span></h1>
+    <div>
+      <b style="margin-left:2px">draw</b>
+      <button class="tool active" data-tool="draw"  title="polyline chain: click = vertex, double-click = end">✏ draw</button>
+      <button class="tool" data-tool="vertex" title="drag a drawn endpoint">⛓ vertex</button>
+      <button class="tool" data-tool="etag"   title="click a segment: apply the edge kind below">EDGE</button>
+      <span style="display:inline-block;margin:0 6px">
+        <select id="edgeKind" title="edge kind to apply">
+          <option value="wall">wall</option>
+          <option value="open">open (no wall: kitchen bleed)</option>
+          <option value="access">access</option>
+          <option value="facade">facade</option>
+        </select>
+      </span>
+      <button class="tool" data-tool="face"   title="click a region: designate it as a room">▦ face</button>
+      <button class="tool" data-tool="erase"  title="click a segment to erase it">🧽 erase</button>
+      <button class="tool" data-tool="grid"   title="helpers: place master grid line, then derived lines (g)">⊞ grid</button>
+      <button class="tool" data-tool="sel"    title="idle">✥ idle</button>
+      <span style="border-left:1px solid #cbd5e1;margin:0 6px;height:18px;display:inline-block"></span>
+      <b>edit</b>
+      <button class="tool" data-tool="edit"    title="select and edit joints, edges, faces">✎ edit</button>
+      <span id="editModes" style="display:none;font:inherit;margin-right:6px">
+        <button class="emode" data-emode="vertex" title="vertex select (1)">1 vertex</button>
+        <button class="emode" data-emode="edge"   title="edge select (2)">2 edge</button>
+        <button class="emode" data-emode="face"   title="face select (3)">3 face</button>
+      </span>
+      <button id="btnEnd" title="end the running polyline (esc)">⏎ end chain</button>
+      <button id="btnDims" class="tool" title="toggle dimension lines (segments + face extents)">📏 dims</button>
+    </div>
+    <div class="hint" id="drawHint">draw: click = vertex, the chain continues, double-click ends it. snapping: green ring = existing point, green wall = riding a line, orange guide = draw locked perpendicular to that wall (angular, fires anywhere on the ray), dashed from last point = axis/45°. split: click on a line splits it. face: click a region to tag it as a room.</div>
+    <svg id="c" width="100%"></svg>
+  </div>
+  <div id="panel">
+    <h2>draft</h2>
+    <label>name <input id="fName" value="open-kern-wall"></label>
+    <label>description <input id="fDescr" value=""></label>
+    <div class="row">
+      <label>frame x (m) <input id="fEx" type="number" value="40" step="0.5" min="5"></label>
+      <label>frame y (m) <input id="fEy" type="number" value="26" step="0.5" min="5"></label>
+    </div>
+    <label>grid (m) <input id="fGrid" type="number" value="3.3" step="0.1" min="0.5"></label>
+
+    <h2>region under the cursor</h2>
+    <label>key <input id="fKey" placeholder="living"></label>
+    <label>display label <input id="fLbl" placeholder="living"></label>
+    <label>name (shown on the canvas) <input id="fRegionName" placeholder="Living room"></label>
+    <label>description <textarea id="fRegionDescr" rows="2" style="width:100%;resize:vertical"></textarea></label>
+    <label>items (fnmatch, comma) <input id="fItems" placeholder="slaap.*, B*-woon"></label>
+    <label>region colour <input id="fColor" type="color" value="#9fc6e8" disabled>
+      <input id="fColorUse" type="checkbox" disabled> use this colour</label>
+    <div class="row">
+      <label>area min (m²) <input id="fAmin" type="number" step="0.5"></label>
+      <label>area max (m²) <input id="fAmax" type="number" step="0.5"></label>
+    </div>
+    <div class="row">
+      <button id="btnTag">Apply to clicked region</button>
+      <button id="btnClearTag">Clear tag</button>
+    </div>
+    <div id="regionInfo" style="font-size:12px;color:#374151;margin-top:8px">click a region with the ▦ tool.</div>
+
+    <h2>edit selected</h2>
+    <div id="selInfo" class="row" style="font-size:12px;color:#374151">nothing selected</div>
+    <div class="row" id="edgeActions" style="display:none">
+      <button id="btnApplyKind">Apply kind to selected edge</button>
+      <button id="btnDelEdge">Delete selected edge</button>
+    </div>
+    <div class="row" id="vtxActions" style="display:none">
+      <button id="btnSplitJoint">Split selected point</button>
+    </div>
+
+    <h2>pve · gate</h2>
+    <div class="row">
+      <button id="btnGate">⛨ gate (harness)</button>
+    </div>
+    <details>
+      <summary>program (PvE JSON)</summary>
+      <textarea id="pveJson" rows="9" spellcheck="false"></textarea>
+    </details>
+    <ul id="gateList"></ul>
+
+    <h2>grid</h2>
+    <div class="row">
+      <label>master axis
+        <select id="gAxis">
+          <option value="vertical">vertical</option>
+          <option value="horizontal">horizontal</option>
+        </select>
+      </label>
+    </div>
+    <ul id="helperList"></ul>
+    <div class="row">
+      <button id="btnDelMaster">✕ remove master</button>
+    </div>
+
+    <h2>drafts</h2>
+    <div class="row">
+      <button id="btnSave" class="primary">💾 save</button>
+      <button id="btnRefresh">↻ list</button>
+    </div>
+    <ul id="drafts"></ul>
+    <div class="row">
+      <button id="btnSolve">📐 solve m²</button>
+      <button id="btnApply">⤓ apply solution</button>
+    </div>
+    <div class="row">
+      <button id="btnClearSolved">✕ clear solution</button>
+      <button id="btnPreview">🖼 render</button>
+    </div>
+    <div class="row">
+      <button id="btnDelDraft">🗑 delete named</button>
+    </div>
+    <div id="preview"></div>
+    <div id="feedback">ready.</div>
+  </div>
+</div>
+<script>
+"use strict";
+const API = "";
+const VB = { w: 1000, h: 620 };
+const PAD = 26;
+
+let draft = { kind: "wallgraph", name: "open-kern-wall", description: "",
+  envelope: {x0: 0, y0: 0, x1: 40, y1: 26}, grid: 3.3,
+  segments: [], edges: {}, faces: [] };
+let tool = "draw", selectedFace = null, pendingTag = null, selection = null, editDrag = null;
+let chain = null;          // running polyline: {first:[x,y], last:[x,y]}
+let vertexDrag = null, edgeDrag = null;     // vertex drag / edge push
+let ghost = null, faceLayerDirty = true, rafOn = 0;
+
+const svg = document.getElementById("c");
+const fmt = n => Math.round(n * 100) / 100;
+// click → meters: rounded to 0.05 m (dense enough for drafting, keeps noding snappy)
+const SNAP = 0.05;
+
+function layout(){
+  const ex = draft.envelope.x1 - draft.envelope.x0;
+  const ey = draft.envelope.y1 - draft.envelope.y0;
+  const s = Math.min((VB.w - 2*PAD) / ex, (VB.h - 2*PAD) / ey);
+  return { s, ox: (VB.w - ex*s) / 2, oy: (VB.h - ey*s) / 2 };
+}
+function m2vb(x, y){
+  const L = layout();
+  return [L.ox + (x - draft.envelope.x0) * L.s, L.oy + (draft.envelope.y1 - y) * L.s];
+}
+function pointerView(ev){
+  const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
+  if (!svg.getScreenCTM()) return { x: 0, y: 0 };
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+function withFrame(fn){
+  if (rafOn) return;                       // one frame in flight (coalesce)
+  const id = requestAnimationFrame(() => {
+    rafOn = 0;
+    try { fn(); } catch(e){ console.warn("frame", e); }
+  });
+  rafOn = id;
+  // fail-safe: if the frame never arrives (throttled tab, headless, rAF paused),
+  // run the body once anyway — otherwise every drag response is silently dropped
+  setTimeout(() => {
+    if (rafOn === id){
+      rafOn = 0;
+      try { cancelAnimationFrame(id); } catch(_){}
+      try { fn(); } catch(e){ console.warn("frameFailsafe", e); }
+    }
+  }, 60);
+}
+
+function setVB(){
+  svg.setAttribute("viewBox", `0 0 ${VB.w} ${VB.h}`);
+  svg.setAttribute("class", "mode-" + tool);
+}
+function edgeKind(i){ const v = draft.edges[i]; return v == null ? (draft.edges[String(i)] == null ? "wall" : draft.edges[String(i)]) : v; }
+function draw(){
+  setVB();
+  const L = layout();
+  const [ex0, ey1] = m2vb(draft.envelope.x0, draft.envelope.y1);
+  const ex = (draft.envelope.x1 - draft.envelope.x0) * L.s, ey = (draft.envelope.y1 - draft.envelope.y0) * L.s;
+  let parts = [];
+  parts.push(`<rect class="envelope" x="${ex0}" y="${ey1}" width="${ex}" height="${ey}"/>`);
+  // face fills (server noding result). Each region gets a white inpaint
+  // ring (the stroke covers `ring px` inward) so the drawn wall keeps its
+  // thickness and overlapping regions would show as color crossing it.
+  const PALETTE = ["#9fc6e8", "#b6d7a8", "#f9cb9c", "#d5a6bd", "#b4a7d6", "#a2c4c9", "#ffc9de"];
+  for (const f of (draft._faces || [])){
+    if (!f.verts || !f.verts.length) continue;
+    const pts = f.verts.map(v => m2vb(v[0], v[1]).map(n => fmt(n)).join(",")).join(" ");
+    const own = (f.color && f.color !== "auto") ? f.color
+      : PALETTE[(f.label || f.key || "?").split("").reduce((a, c) => a + c.charCodeAt(0), 0) % PALETTE.length];
+    parts.push(`<polygon class="face-fill" data-cx="${f.centroid[0]}" data-cy="${f.centroid[1]}" points="${pts}"
+      fill="${own}" fill-opacity="${f.label ? 0.55 : 0.3}"
+      stroke="#ffffff" stroke-width="8"/>`);
+    const [tx, ty] = m2vb(f.centroid[0], f.centroid[1]);
+    if (f.name) parts.push(`<text class="facelabel face-name" x="${tx}" y="${ty - 12}" text-anchor="middle">${f.name}</text>`);
+    parts.push(`<text class="facelabel" x="${tx}" y="${ty + 3}" text-anchor="middle">${(f.label ? f.label + " · " : "")}${fmt(f.area)} m2</text>`);
+  }
+  if (showDims){
+    draft.segments.forEach(sg => {
+      const dx = sg.x1 - sg.x0, dy = sg.y1 - sg.y0;
+      const L = Math.hypot(dx, dy);
+      if (L < 1e-9) return;
+      const horiz = Math.abs(dy) < 1e-9, vert = Math.abs(dx) < 1e-9;
+      if (horiz){
+        const yo = sg.y0 + 0.8;
+        const [a,b] = m2vb(sg.x0, yo), [c,d] = m2vb(sg.x1, yo);
+        parts.push(`<line class="dim" x1="${fmt(a)}" y1="${fmt(b)}" x2="${fmt(c)}" y2="${fmt(d)}"/>`);
+        parts.push(`<text class="dim" x="${fmt((a+c)/2)}" y="${fmt(b + 8)}" text-anchor="middle">${fmt(L)} m</text>`);
+      } else if (vert){
+        const xo = sg.x0 + 0.8;
+        const [a,b] = m2vb(xo, sg.y0), [c,d] = m2vb(xo, sg.y1);
+        parts.push(`<line class="dim" x1="${fmt(a)}" y1="${fmt(b)}" x2="${fmt(c)}" y2="${fmt(d)}"/>`);
+        const mx = (a+c)/2, my = (b+d)/2;
+        parts.push(`<text class="dim" x="${fmt(mx + 6)}" y="${fmt(my)}" transform="rotate(90 ${fmt(mx + 6)} ${fmt(my)})" text-anchor="middle">${fmt(L)} m</text>`);
+      }
+    });
+  }
+  // helper grid lines (construction geometry: constructed rather than wall)
+  for (const hl of helperLines()){
+    if (hl.master){
+      const [a0, b0] = m2vb(hl.axis === "vertical" ? hl.pos : draft.envelope.x0,
+                            hl.axis === "vertical" ? draft.envelope.y0 : hl.pos);
+      const [a1, b1] = m2vb(hl.axis === "vertical" ? hl.pos : draft.envelope.x1,
+                            hl.axis === "vertical" ? draft.envelope.y1 : hl.pos);
+      parts.push(`<line class="helper-line master-helper" x1="${a0}" y1="${b0}" x2="${a1}" y2="${b1}"/>
+        <text class="facelabel" x="${a0 + 6}" y="${b0 + (hl.axis === "horizontal" ? -6 : 14)}" fill="#2563eb">master</text>`);
+    } else {
+      const [c0x, c0y] = hl.axis === "vertical"
+        ? m2vb(hl.pos, draft.envelope.y0) : m2vb(draft.envelope.x0, hl.pos);
+      const [c1x, c1y] = hl.axis === "vertical"
+        ? m2vb(hl.pos, draft.envelope.y1) : m2vb(draft.envelope.x1, hl.pos);
+      parts.push(`<line class="helper-line" x1="${c0x}" y1="${c0y}" x2="${c1x}" y2="${c1y}"/>
+        <text class="facelabel" x="${c0x + 6}" y="${c0y + (hl.axis === "horizontal" ? -6 : 12)}" fill="#3b82f6">${hl.id} · ${fmt(hl.pos)} m</text>`);
+    }
+  }
+  // segments + edge kind styles
+  draft.segments.forEach((s, i) => {
+    const [x1, y1] = m2vb(s.x0, s.y0), [x2, y2] = m2vb(s.x1, s.y1);
+    const kind = edgeKind(i);
+    parts.push(`<line class="seg ${kind}" data-idx="${i}" data-kind="${kind}" x1="${fmt(x1)}" y1="${fmt(y1)}" x2="${fmt(x2)}" y2="${fmt(y2)}"/>`);
+  });
+  // door markers: a dot at the (unsolved) midpoint of every "door" edge
+  draft.segments.forEach((s, i) => {
+    const kind = edgeKind(i);
+    if (kind !== "door") return;
+    const mx = (s.x0 + s.x1) / 2, my = (s.y0 + s.y1) / 2;
+    const [x1, y1] = m2vb(mx, my);
+    parts.push(`<circle class="door-mark" cx="${fmt(x1)}" cy="${fmt(y1)}" r="5" fill="#2563eb"/>
+      <text class="door-label" x="${fmt(x1 + 5)}" y="${fmt(y1 - 2)}" font-size="10" fill="#2563eb">door</text>`);
+  });
+  // selection highlight (edit tool)
+  if (selection && selection.type === "edge"){
+    const ss = draft.segments[selection.idx];
+    if (ss){
+      const [a,b] = m2vb(ss.x0, ss.y0), [c,d] = m2vb(ss.x1, ss.y1);
+      parts.push(`<line class="sel-edge" x1="${fmt(a)}" y1="${fmt(b)}" x2="${fmt(c)}" y2="${fmt(d)}"/>`);
+    }
+  }
+  if (selection && selection.type === "joint"){
+    const [a,b] = m2vb(selection.pt[0], selection.pt[1]);
+    parts.push(`<circle class="sel-vert" cx="${fmt(a)}" cy="${fmt(b)}" r="8"/>`);
+  }
+  if (selection && selection.type === "face" && selection.face && selection.face.verts){
+    const pts = selection.face.verts.map(v => m2vb(v[0], v[1]).map(n => fmt(n)).join(",")).join(" ");
+    parts.push(`<polygon points="${pts}" fill="none" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="6 4" pointer-events="none"/>`);
+  }
+
+  // joints: distinct segment endpoints (for the vertex tool)
+  const seen = new Map();
+  draft.segments.forEach((s, i) => {
+    for (const [px, py] of [[s.x0, s.y0], [s.x1, s.y1]]){
+      const k = px + "," + py;
+      if (!seen.has(k)) seen.set(k, []);
+      seen.get(k).push(i);
+    }
+  });
+  svg._joints = seen;
+  const inEdit = (tool === "edit");
+  for (const [k, idxList] of seen){
+    const [px, py] = k.split(",").map(Number);
+    const [vx, vy] = m2vb(px, py);
+    if (inEdit){
+      const hx = fmt(vx - 5), hy = fmt(vy - 5);
+      parts.push(`<rect class="vert edit-handle" data-pt="${k}" data-segs="${idxList.join(",")}"
+        x="${hx}" y="${hy}" width="10" height="10" rx="1"/>`);
+    } else
+      parts.push(`<circle class="vert" data-pt="${k}" data-segs="${idxList.join(",")}" cx="${fmt(vx)}" cy="${fmt(vy)}"/>`);
+  }
+  parts.push('<line id="rubber" class="rubber" style="display:none"/>');
+  const solved = draft._solved || null;
+  if (solved && solved.junctions){
+    const S = new Map(solved.junctions.map(j => [j.orig.join(","), j.solved]));
+    const okCount = (solved.faces || []).filter(f => f.ok).length;
+    for (const seg of draft.segments){
+      const a = S.get([seg.x0, seg.y0].join(",")), b = S.get([seg.x1, seg.y1].join(","));
+      if (!a || !b) continue;
+      const [ax, ay] = m2vb(a[0], a[1]), [bx, by] = m2vb(b[0], b[1]);
+      parts.push(`<line x1="${fmt(ax)}" y1="${fmt(ay)}" x2="${fmt(bx)}" y2="${fmt(by)}"
+        stroke="#1d4ed8" stroke-width="1.5" stroke-dasharray="7 4" opacity="0.95"/>`);
+    }
+    for (const f of (solved.faces || [])){
+      const [cx, cy] = m2vb(f.centroid_solved ? f.centroid_solved[0] : 0, f.centroid_solved ? f.centroid_solved[1] : 0);
+      const mark = f.ok ? "✓" : "✗";
+      const col = f.ok ? "#059669" : "#dc2626";
+      const band = f.band && f.band[0] !== null ? ` (${fmt(f.band[0])}–${fmt(f.band[1])})` : "";
+      parts.push(`<text x="${cx}" y="${cy - 22}" text-anchor="middle" font-size="11" fill="${col}"
+        style="paint-order:stroke" stroke="#fff" stroke-width="3" font-weight="bold">
+        ${f.label || f.key || "?"} ${mark} ${fmt(f.area)} m2</text>`);
+      parts.push(`<text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="10" fill="${col}"
+         style="paint-order:stroke" stroke="#fff" stroke-width="3">band${band}</text>`);
+    }
+    parts.push(`<text x="16" y="18" font-size="12" fill="#1d4ed8">solved: ${okCount}/${(solved.faces || []).length} regions in band — blue dashed = solved strokes</text>`);
+  }
+  parts.push('<g id="snapfx" pointer-events="none"></g>');
+  svg.innerHTML = parts.join("");
+  bindLayer();
+}
+
+function bindLayer(){
+  svg.querySelectorAll(".zone-rect").forEach(() => {});
+  svg.querySelectorAll(".vert").forEach(c => {
+    c.addEventListener("pointerdown", ev => {
+      if (tool !== "vertex" && !(tool === "edit" && editMode === "vertex")) return;
+      ev.stopPropagation();
+      const pt = c.dataset.pt.split(",").map(Number);
+      vertexDrag = { orig: [pt[0], pt[1]], work: [pt[0], pt[1]], segIdxList: c.dataset.segs.split(",").map(Number), armSeg: -1 };
+      if (ev.altKey || ev.shiftKey){
+        feedback("peeling one arm (continue holding during the drag)");
+        const raw = meters(ev, false);
+        const dirX = raw[0] - pt[0], dirY = raw[1] - pt[1];
+        const dirNorm = Math.hypot(dirX, dirY) || 1;
+        let bestIdx=-1, bestCos=-1;
+        vertexDrag.segIdxList.forEach(di => {
+          const sg = draft.segments[di];
+          if (!sg) return 0;
+          let otherX, otherY;
+          const d0 = Math.hypot(sg.x0 - pt[0], sg.y0 - pt[1]);
+          const d1 = Math.hypot(sg.x1 - pt[0], sg.y1 - pt[1]);
+          if (d0 < 1e-6 && sg.x0 <= sg.x0){ otherX = sg.x1; otherY = sg.y1; } else if (d1 < 1e-6){ otherX = sg.x0; otherY = sg.y0; } else return 0;
+          const base = Math.hypot(otherX-pt[0], otherY-pt[1]) || 1;
+          const cos = ( (otherX-pt[0])*dirX + (otherY-pt[1])*dirY ) / (base*dirNorm);
+          if (cos > bestCos){ bestCos = cos; bestIdx = di; }
+          return 0;
+        });
+        vertexDrag.armSeg = bestIdx;
+      }
+      if (tool === "edit"){
+        selection = { type: "joint", pt: [pt[0], pt[1]], segs: vertexDrag.segIdxList.slice() };
+        document.getElementById("selInfo").textContent = "vertex [" + pt.map(fmt).join(", ") + "] · " + selection.segs.length + " strokes";
+        document.getElementById("edgeActions").style.display = "none";
+        document.getElementById("vtxActions").style.display = "block";
+        draw();
+      }
+      safePointerCapture(svg, ev);
+      feedback("moving joint " + pt + " — release to settle.");
+    });
+  });
+  svg.querySelectorAll(".seg").forEach(l => {
+    l.addEventListener("pointerdown", ev => {
+      if (tool !== "edit") return;
+      ev.stopPropagation();
+      const idx = Number(l.dataset.idx);
+      const s = draft.segments[idx];
+      if (!s) return;
+      const pt = meters(ev, false);
+      edgeDrag = { idx, orig: { x0: s.x0, y0: s.y0, x1: s.x1, y1: s.y1 },
+                 pointerStart: pt.slice(),
+                 axis: (Math.abs(s.x1 - s.x0) >= Math.abs(s.y1 - s.y0)) ? "horizontal" : "vertical" };
+      safePointerCapture(svg, ev);
+      feedback("pushing edge " + idx + " (release to settle)");
+    });
+  l.addEventListener("click", ev => {
+      if (tool === "etag"){
+        const kind = document.getElementById("edgeKind").value;
+        draft.edges[l.dataset.idx] = kind;
+        if (kind === "door"){
+            const i = Number(l.dataset.idx);
+            const s = draft.segments[i];
+            const run = Math.hypot(s.x1 - s.x0, s.y1 - s.y0);
+            if (run < 1.2 - 1e-9){
+                feedback("edge " + i + " is only " + fmt(run) +
+                    " m long – a door needs at least 1.20 m. Pick a longer wall or use access.");
+                draft.edges[l.dataset.idx] = "wall";
+            } else {
+                l.dataset.kind = "door";
+                feedback("edge " + i + " classified as door at " + fmt(run) + " m (min " + fmt(run) + ").");
+            }
+        }
+        draw(); noding();
+      } else if (tool === "erase"){
+        draft.edges = Object.fromEntries(Object.entries(draft.edges)
+          .map(([k, v]) => [String(Math.max(Number(k) - (Number(k) > l.dataset.idx ? 1 : 0)), v)])
+          .filter(([k]) => Number(k) !== Number(l.dataset.idx)));
+        draft.segments.splice(Number(l.dataset.idx), 1);
+        draw(); noding();
+      }
+    });
+  });
+  svg.querySelectorAll(".face-fill").forEach(f => {
+    f.addEventListener("click", ev => {
+      if (tool !== "face") return;
+      selectedFace = currentFaces().find(x =>
+        x.centroid[0] === Number(f.dataset.cx) && x.centroid[1] === Number(f.dataset.cy));
+      pendingTag = selectedFace || null;
+      if (pendingTag){
+        fKey.value = pendingTag.key || suggestedKey(pendingTag);
+        fLbl.value = pendingTag.label || "";
+        fRegionName.value = pendingTag.name || "";
+        fRegionDescr.value = pendingTag.description || "";
+        fItems.value = (pendingTag.items || []).join(", ");
+        fAmin.value = pendingTag.area_min ?? "";
+        fAmax.value = pendingTag.area_max ?? "";
+        fColor.value = pendingTag.color && pendingTag.color !== "auto" ? pendingTag.color : "#9fc6e8";
+        fColorUse.checked = Boolean(pendingTag.color && pendingTag.color !== "auto");
+        fColor.disabled = false; fColorUse.disabled = false;
+        document.getElementById("regionInfo").textContent =
+          `index ${pendingTag.index} · ${fmt(pendingTag.area)} m² · centroid ${pendingTag.centroid}`;
+        feedback("region picked — fill key/label/items/area band and Apply.");
+      }
+    });
+  });
+}
+function suggestedKey(face){ return "room" + (draft.faces.length + 1); }
+function pointInPoly(pt, poly){
+  let inside = false;
+  if (!poly || !poly.verts) return false;
+  const pts = poly.verts, v = poly.verts[poly.verts.length - 1];
+  let j = pts.length - 1;
+  for (let i = 0; i < pts.length; j = i++){
+    const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+    const hit = ((yi > pt[1]) !== (yj > pt[1])) && (pt[0] < (xj - xi) * (pt[1]-yi)/(yj-yi) + xi);
+    if (hit) inside = !inside;
+  }
+  return inside;
+}
+function currentFaces(){
+  return draft._faces || [];
+}
+
+
+// ── snapping: point, on-wall, perpendicular, ortho (metres, pure math) ─
+function allJoints(){
+  const map = new Map();
+  draft.segments.forEach(s => {
+    for (const p of [[s.x0, s.y0], [s.x1, s.y1]]){
+      const k = p[0] + "," + p[1];
+      if (!map.has(k)) map.set(k, p);
+    }
+  });
+  return [...map.values()];
+}
+function nearestJoint(m, tolM){
+  let best = null, best_d = tolM;
+  for (const p of allJoints()){
+    const d = Math.hypot(p[0] - m[0], p[1] - m[1]);
+    if (d < best_d){ best = p; best_d = d; }
+  }
+  return best;  // null outside tolerance
+}
+function projectOnSeg(m, s){
+  // distance to the *segment* (clamped), plus the on-line projection point
+  const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+  const L2 = dx*dx + dy*dy;
+  if (L2 < 1e-12) return null;
+  const t = Math.max(0, Math.min(1, ((m[0]-s.x0)*dx + (m[1]-s.y0)*dy) / L2));
+  const px = s.x0 + t*dx, py = s.y0 + t*dy;
+  return { pt: [px, py], dist: Math.hypot(m[0]-px, m[1]-py) };
+}
+// one snap decision for a cursor point m (metres)
+// prev: the running chain vertex (perpendicular/ortho reference), may be null
+// ── snap candidates: collect every plausible target, rank joint > wall >
+//    grid > perp > ortho > diag > free. within a tier, nearer wins. Tab
+//    cycles the candidates so the dense-drawing "it snapped to the wrong one"
+//    is recoverable without releasing the button.
+function gatherSnapCandidates(m, prev, tolM){
+  const cands = [], seenPts = new Set();
+  const add = (c) => {
+    const k = c.m.map(v => Number(v)).map(v => v.toFixed(6)).join(",");
+    if (seenPts.has(k)) return;
+    seenPts.add(k); cands.push(c);
+  };
+  // 1. joints already on the drawing
+  for (const p of allJoints()){
+    const d = Math.hypot(p[0] - m[0], p[1] - m[1]);
+    if (d <= tolM) add({ m: [p[0], p[1]], kind: "joint", ref: p, dist: d, tier: 0 });
+  }
+  // 2. on-wall snapping (riding a drawn stroke)
+  for (const seg of draft.segments){
+    const pr = projectOnSeg(m, seg);
+    if (pr && pr.dist <= tolM) add({ m: pr.pt.slice(), kind: "onseg", ref: seg, dist: pr.dist, tier: 1 });
+  }
+  // 2b. helper grid lines
+  for (const hl of helperLines()){
+    const dv = hl.axis === "vertical" ? Math.abs(m[0] - hl.pos) : Math.abs(m[1] - hl.pos);
+    if (dv <= tolM)
+      add({ m: hl.axis === "vertical" ? [hl.pos, m[1]] : [m[0], hl.pos],
+            kind: "grid", ref: hl, dist: dv, tier: 2 });
+  }
+  if (prev){
+    // 3. perpendicular lock — one candidate per wall that is (near-)orthogonal.
+    // The snap point is the PROJECTION of the cursor onto the perpendicular
+    // line through prev (not a constant-radius point), so it stays pinned to
+    // the perpendicular line as the cursor moves. Hysteresis: engage at
+    // nDot < 0.05, release at nDot > 0.12, to stop flicker.
+    const vx = m[0] - prev[0], vy = m[1] - prev[1], vlen = Math.hypot(vx, vy);
+    if (vlen > 0.1){
+      let perpAdded = false;
+      for (const s of draft.segments){
+        const dx = s.x1 - s.x0, dy = s.y1 - s.y0, len = Math.hypot(dx, dy);
+        if (len < 1e-9) continue;
+        const nDot = Math.abs((vx*(dx/len) + vy*(dy/len)) / vlen);
+        const engaged = perpHyst.wall === s;
+        const threshold = engaged ? 0.12 : 0.05;
+        if (nDot < threshold){
+          let px = dy/len, py = -dx/len;
+          if (vx*px + vy*py < 0){ px = -dy/len; py = dx/len; }
+          // project cursor onto the perpendicular line through prev
+          const along = vx*px + vy*py;
+          const locked = [fmt(prev[0] + along*px), fmt(prev[1] + along*py)];
+          add({ m: locked, kind: "perp", ref: [s, [prev[0], prev[1], px, py]],
+               dist: Math.hypot(locked[0]-m[0], locked[1]-m[1]), tier: 3 });
+          perpAdded = true;
+          perpHyst = { wall: s };
+        }
+      }
+      if (!perpAdded) perpHyst = { wall: null };
+    }
+    // 4. ortho (axis-locked from prev)
+    if (Math.abs(m[1] - prev[1]) <= tolM)
+      add({ m: [fmt(m[0]), fmt(prev[1])], kind: "ortho", ref: null,
+            dist: Math.abs(m[1]-prev[1]), tier: 4 });
+    if (Math.abs(m[0] - prev[0]) <= tolM)
+      add({ m: [fmt(prev[0]), fmt(m[1])], kind: "ortho", ref: null,
+            dist: Math.abs(m[0]-prev[0]), tier: 4 });
+    // 5. 45-degree diagonal
+    if (Math.abs(Math.abs(m[0]-prev[0]) - Math.abs(m[1]-prev[1])) < tolM){
+      const d = Math.max(Math.abs(m[0]-prev[0]), Math.abs(m[1]-prev[1]));
+      const sx = m[0] >= prev[0] ? 1 : -1, sy = m[1] >= prev[1] ? 1 : -1;
+      const pt = [fmt(prev[0]+d*sx), fmt(prev[1]+d*sy)];
+      add({ m: pt, kind: "diag", ref: null,
+            dist: Math.hypot(pt[0]-m[0], pt[1]-m[1]), tier: 5 });
+    }
+  }
+  // ── compound snap: on-seg ∩ perpendicular from prev = one rigid point ─
+  // A compound exists when the cursor rides an existing stroke (on-seg
+  // within tol) AND the chain would be perpendicular to that stroke. The
+  // snap point is the foot of the perpendicular from prev onto the stroke
+  // line — a single point that works for ANY wall orientation (horizontal,
+  // vertical, or angled). When chosen it is pinned: the cursor cannot move
+  // until it exits the escape radius or the author presses Tab.
+  if (prev){
+    for (const c of cands){
+      if (c.kind !== "onseg" || !c.ref) continue;
+      const seg = c.ref;
+      const sd = [seg.x1 - seg.x0, seg.y1 - seg.y0];
+      const sLen2 = sd[0]*sd[0] + sd[1]*sd[1];
+      if (sLen2 < 1e-12) continue;
+      // foot of perpendicular from prev onto the segment's infinite line
+      const t = ((prev[0]-seg.x0)*sd[0] + (prev[1]-seg.y0)*sd[1]) / sLen2;
+      if (t < -0.05 || t > 1.05) continue;                 // outside segment
+      const I = [seg.x0 + sd[0]*t, seg.y0 + sd[1]*t];
+      const dI = Math.hypot(I[0]-m[0], I[1]-m[1]);
+      if (dI > tolM) continue;
+      cands.push({ m: [fmt(I[0]), fmt(I[1])], kind: "compound",
+                   ref: { onseg: seg, perpFrom: prev.slice() },
+                   dist: dI, tier: -1 });
+    }
+  }
+  // always: the raw cursor itself
+  add({ m: [fmt(m[0]), fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 });
+  cands.sort((a,b) => a.tier - b.tier || a.dist - b.dist);
+  return cands;
+}
+function snapPoint(m, prev, tolM, forceIdx){
+  const cands = gatherSnapCandidates(m, prev, tolM);
+  snapCandidates = cands;
+  let idx = 0;
+  if (forceIdx == null) snapActiveIdx = 0;
+  else snapActiveIdx = Math.max(0, Math.min(cands.length-1, forceIdx));
+  idx = snapActiveIdx;
+  const base = cands.length ? cands[idx] : { m: [fmt(m[0]),fmt(m[1])], kind: "free", ref: null, dist: 0, tier: 6 };
+  const out = { m: base.m.slice(), kind: base.kind, ref: base.ref,
+                candCount: cands.length || 1, candIdx: idx };
+  if (base.kind === "compound") compoundLock = { pt: base.m.slice(), px: COMPOUND_ESCAPE_PX };
+  else if (base.kind === "free") compoundLock = null;
+  return out;
+}
+
+let curSnap = { m: null, kind: "free", ref: null, candCount: 0, candIdx: 0 };   // shared draw state
+let snapCandidates = [], snapActiveIdx = 0, lastRawMForSnap = null,
+    lastPrevForSnap = null, lastTolMForSnap = 0.1;
+// compound lock: when a compound snap is chosen the cursor is pinned to that
+// exact point until the author moves > COMPOUND_ESCAPE_PX px away or tabs out
+const COMPOUND_ESCAPE_PX = 28;
+let compoundLock = null;   // { pt:[x,y], px:number }
+let perpHyst = { wall: null };  // perp hysteresis: engaged wall
+function renderSnapFx(snap){
+  let parts = "";
+  if (snap && snap.kind === "compound"){
+    const [sx, sy] = m2vb(snap.m[0], snap.m[1]);
+    parts += `<circle cx="${fmt(sx)}" cy="${fmt(sy)}" r="6" fill="none" `
+           + `stroke="#dc2626" stroke-width="2.5"/>`;
+    parts += `<circle cx="${fmt(sx)}" cy="${fmt(sy)}" r="2" fill="#dc2626"/>`;
+    parts += `<text x="${fmt(sx + 10)}" y="${fmt(sy - 10)}" font-size="10" `
+           + `font-weight="700" fill="#dc2626">compound · tab to exit</text>`;
+  }
+  if (snap && snap.kind === "joint" && snap.ref)
+    parts += `<circle cx="${m2vb(snap.ref[0], snap.ref[1])[0]}" cy="${m2vb(snap.ref[0], snap.ref[1])[1]}"
+      r="7" fill="none" stroke="#059669" stroke-width="2.5"/>`;
+  if (snap && snap.kind === "onseg" && snap.ref){
+    const s = snap.ref;
+    parts += `<line x1="${m2vb(s.x0, s.y0)[0]}" y1="${m2vb(s.x0, s.y0)[1]}"
+      x2="${m2vb(s.x1, s.y1)[0]}" y2="${m2vb(s.x1, s.y1)[1]}" stroke="#059669"
+      stroke-width="4" opacity="0.35"/>`;
+  }
+  if (snap && snap.kind === "grid" && snap.ref){
+    const hl = snap.ref;
+    const [a0, b0] = hl.axis === "vertical"
+      ? m2vb(hl.pos, draft.envelope.y0) : m2vb(draft.envelope.x0, hl.pos);
+    const [a1, b1] = hl.axis === "vertical"
+      ? m2vb(hl.pos, draft.envelope.y1) : m2vb(draft.envelope.x1, hl.pos);
+    parts += `<line class="snap-line" x1="${a0}" y1="${b0}" x2="${a1}" y2="${b1}"/>`;
+  }
+  if (snap && snap.kind === "perp" && snap.ref){
+    const [sx, sy, nx, ny] = snap.ref[1];
+    const a = 60;
+    parts += `<line x1="${m2vb(sx - nx*a, sy - ny*a)[0]}" y1="${m2vb(sx - nx*a, sy - ny*a)[1]}"
+      x2="${m2vb(sx + nx*a, sy + ny*a)[0]}" y2="${m2vb(sx + nx*a, sy + ny*a)[1]}"
+      stroke="#f97316" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.9"/>`;
+  }
+  if (snap && (snap.kind === "ortho" || snap.kind === "diag") && chain){
+    const [ax, ay] = m2vb(chain.last[0], chain.last[1]);
+    const [bx, by] = m2vb(snap.m[0], snap.m[1]);
+    parts += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#f97316"
+      stroke-width="1.5" stroke-dasharray="4 3" opacity="0.9"/>`;
+  }
+  if (curSnap && curSnap.candCount > 1 && curSnap.kind !== "compound"){
+    const c = curSnap.candCount, i = (curSnap.candIdx || 0) + 1;
+    const [tx, ty] = m2vb(curSnap.m[0], curSnap.m[1]);
+    parts += `<text x="${tx + 8}" y="${ty - 8}" font-size="10" font-weight="600" fill="#1d4ed8">${i}/${c} ${curSnap.kind || ""} · tab cycles</text>`;
+  }
+  const fx = svg.querySelector("#snapfx");
+  if (fx) fx.innerHTML = parts;
+}
+function safePointerCapture(el, ev){
+  try { el.setPointerCapture(ev.pointerId); } catch(_){}
+}
+// pointercancel / lost capture: never leave drag state dangling,
+// or a later click resumes a STALE grip and mayhem ensues
+function clearDragState(){
+  vertexDrag = null; edgeDrag = null;
+  renderSnapFx(null);
+}
+
+// ── tools ──────────────────────────────────────────────────────────────
+function setTool(next){
+  tool = next;
+  document.querySelectorAll("button.tool").forEach(x => x.classList.toggle("active", x.dataset.tool === next));
+  const em = document.getElementById("editModes");
+  if (em) em.style.display = (next === "edit") ? "inline-block" : "none";
+  setVB();
+  draw();
+}
+let editMode = "vertex";   // explicit-blender-style edit sub-mode
+function setEditMode(next){
+  editMode = next;
+  document.querySelectorAll("button.emode").forEach(b => b.classList.toggle("active", b.dataset.emode === next));
+  draw();
+  feedback("edit mode: " + next + (next === "vertex" ? " — drag the square handles." : next === "edge" ? " — click an edge, then reclassify/delete or push it." : " — click inside a face to tag it."));
+}
+document.querySelectorAll("button.emode").forEach(b => b.addEventListener("click", () => setEditMode(b.dataset.emode)));
+document.querySelectorAll("button.tool").forEach(b => b.addEventListener("click", () => setTool(b.dataset.tool)));
+function typingInField(ev){
+  const t = ev.target;
+  return t &&(["INPUT", "SELECT", "TEXTAREA"].includes(t.tagName));
+}
+document.addEventListener("keydown", ev => {
+  if (typingInField(ev)) return;
+  if (ev.key === "Escape" && chain){ endChain(); }
+  if (ev.key === "d") setTool("draw");
+  if (ev.key === "v") setTool("vertex");
+  if (ev.key === "e") setTool("etag");
+  if (ev.key === "f") setTool("face");
+  if (ev.key === "x") setTool("erase");
+  if (tool === "edit"){
+    if (ev.key === "1") setEditMode("vertex");
+    if (ev.key === "2") setEditMode("edge");
+    if (ev.key === "3") setEditMode("face");
+  }
+});
+
+
+// ── helper grid registry ────────────────────────────────────────────────
+function helperLines(){
+  const h = draft.helpers || {};
+  const master = h.master;
+  const out = [];
+  if (master && master.axis)
+    out.push({ id: "M", axis: master.axis, pos: Number(master.pos), master: true });
+  for (const ln of h.lines || [])
+    out.push({ id: ln.id, axis: ln.axis, pos: Number(master.pos) + Number(ln.offset), master: false });
+  return out;
+}
+function bindJunction(pt, lineId){
+  const key = Math.round(pt[0] * 10) + "," + Math.round(pt[1] * 10);
+  draft.bindings = (draft.bindings || []).filter(b =>
+    Math.round(b.junction.x * 10) !== Math.round(pt[0] * 10) ||
+    Math.round(b.junction.y * 10) !== Math.round(pt[1] * 10));
+  draft.bindings.push({ line: lineId, junction: { x: fmt(pt[0]), y: fmt(pt[1]) } });
+  void key;
+}
+function unbindJunctionNear(pt){
+  draft.bindings = (draft.bindings || []).filter(b =>
+    Math.hypot(b.junction.x - pt[0], b.junction.y - pt[1]) > 0.25);
+}
+function refreshHelperList(){
+  const ul = document.getElementById("helperList");
+  const h = draft.helpers || {};
+  const rows = [];
+  if (h.master)
+    rows.push(`<li data-del="master" style="cursor:pointer">master · ${h.master.axis} @ ${fmt(h.master.pos)} m · module ${fmt(h.master.module)}</li>`);
+  for (const ln of h.lines || [])
+    rows.push(`<li data-del="${ln.id}" style="cursor:pointer">${ln.id} · ${ln.axis} · offset ${fmt(ln.offset)} m</li>`);
+  for (const b of draft.bindings || [])
+    rows.push(`<li data-unbind="${b.junction.x},${b.junction.y}|${b.line}" style="cursor:pointer">
+      ⟶ ${b.line} binds junction (${fmt(b.junction.x)}, ${fmt(b.junction.y)})</li>`);
+  ul.innerHTML = rows.join("") || "<li><i>(no helpers)</i></li>";
+  ul.querySelectorAll("li[data-del]").forEach(li => li.addEventListener("click", () => {
+    if (li.dataset.del === "master"){
+      draft.helpers = { master: null, lines: [] };
+      draft.bindings = [];
+    } else {
+      draft.helpers.lines = (draft.helpers.lines || []).filter(l => l.id !== li.dataset.del);
+      draft.bindings = (draft.bindings || []).filter(b => b.line !== li.dataset.del);
+    }
+    draw(); refreshHelperList(); noding();
+  }));
+  ul.querySelectorAll("li[data-unbind]").forEach(li => li.addEventListener("click", () => {
+    const [xy, lineId] = li.dataset.unbind.split("|");
+    const [x, y] = xy.split(",").map(Number);
+    draft.bindings = (draft.bindings || []).filter(b =>
+      !(b.line === lineId && b.junction.x === x && b.junction.y === y));
+    draw(); refreshHelperList(); noding();
+  }));
+}
+// ── polyline chain ─────────────────────────────────────────────────────
+function endChain(){
+  if (!chain){ return; }
+  chain = null;
+  compoundLock = null;
+  document.getElementById("rubber").style.display = "none";
+  draw(); noding();
+  feedback("polyline ended — " + draft.segments.length + " segments, noding…");
+}
+document.getElementById("btnEnd").addEventListener("click", endChain);
+
+// ── keep the stroke list = the DCEL edge skeleton ─────────────────────
+// A stroke in the canvas is a stored list entry, but the DCEL treats an
+// edge as the section between two junctions. Whenever a new stroke is
+// committed (or a vertex dragged), split every stroke at every crossing
+// and T-junction: that way a crossing becomes two endpoints and the
+// author can delete one arm of a cross without deleting the whole thing.
+function nodeAllStrokes(){
+  const strokes = draft.segments.map(s => ({ x0: +s.x0, y0: +s.y0, x1: +s.x1, y1: +s.y1 }));
+  const kinds = strokes.map((_, i) => edgeKind(i));
+  if (!strokes.length) return;
+  // 1. collapse coincident identical strokes, keeping the higher-specificity kind
+  const spec = { door: 5, access: 4, open: 3, facade: 2, wall: 1 };
+  const kept = [];
+  for (let i = 0; i < strokes.length; i++){
+    let collapsed = false;
+    for (let j = 0; j < kept.length; j++){
+      if (identicalLine(strokes[i], kept[j].seg)){
+        if (spec[kinds[i]] > spec[kept[j].kind]) kept[j].kind = kinds[i];
+        else if (spec[kinds[i]] === spec[kept[j].kind] && kinds[i] !== kept[j].kind)
+          feedback("overlapping strokes merged - classify them again if you meant a door or opening.");
+        collapsed = true;
+        break;
+      }
+    }
+    if (!collapsed) kept.push({ seg: strokes[i], kind: kinds[i] });
+  }
+  const inSt = kept.map(k => k.seg), inKind = kept.map(k => k.kind);
+  const n = inSt.length;
+  // 2. collect junction points per stroke (endpoints + crossings + T-junctions)
+  const ptsPer = inSt.map(s => [{ x: s.x0, y: s.y0 }, { x: s.x1, y: s.y1 }]);
+  for (let i = 0; i < n; i++){
+    for (let j = i + 1; j < n; j++){
+      const p = segIntersect(inSt[i], inSt[j]);
+      if (p){ ptsPer[i].push(p); ptsPer[j].push(p); }
+    }
+  }
+  for (let i = 0; i < n; i++){
+    for (let ei of [0,1]){
+      const e = ei === 0 ? inSt[i].x0 : inSt[i].x1;
+      const fY = ei === 0 ? inSt[i].y0 : inSt[i].y1;
+      for (let j = 0; j < n; j++){
+        if (j === i) continue;
+        if (pointOnSeg(e, fY, inSt[j]))
+          ptsPer[j].push({ x: e, y: fY });
+      }
+    }
+  }
+  // 3. split
+  const pieces = [];
+  for (let i = 0; i < n; i++){
+    const s = inSt[i], dx = s.x1 - s.x0, dy = s.y1 - s.y0, L = Math.hypot(dx, dy);
+    if (L < 1e-9) continue;
+    const ts = ptsPer[i].map(p => (Math.abs(dx) > 1e-9) ? (p.x - s.x0)/dx
+                              : (Math.abs(dy) > 1e-9 ? (p.y - s.y0)/dy : 0))
+        .filter(t => Number.isFinite(t) && t >= -1e-9 && t <= 1 + 1e-9);
+    let uniq = ts.slice().sort((a,b) => a - b)
+        .filter((t, i, arr) => i === 0 || t - arr[i-1] > 1e-9);
+    if (!uniq.length) uniq = [0,1];
+    else {
+      if (uniq[0] > 1e-9) uniq.unshift(0);
+      if (uniq[uniq.length-1] < 1 - 1e-9) uniq.push(1);
+    }
+    for (let k = 0; k < uniq.length - 1; k++){
+      const ta = uniq[k], tb = uniq[k+1];
+      if (tb - ta < 1e-9) continue;
+      const ax = s.x0 + dx*ta, ay = s.y0 + dy*ta;
+      const bx = s.x0 + dx*tb, by = s.y0 + dy*tb;
+      if (Math.hypot(bx-ax, by-ay) < 1e-9) continue;
+      pieces.push({ seg: { x0: ax, y0: ay, x1: bx, y1: by }, kind: inKind[i] });
+    }
+  }
+  // 4. dedupe identical sub-segments
+  const out = []; const seen = new Set();
+  for (const p of pieces){
+    const a = [p.seg.x0, p.seg.y0, p.seg.x1, p.seg.y1].map(v => Math.round(v*1e6)).join(",");
+    const b = [p.seg.x1, p.seg.y1, p.seg.x0, p.seg.y0].map(v => Math.round(v*1e6)).join(",");
+    const key = a < b ? a : b;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  draft.segments = out.map(p => ({ x0: fmt(p.seg.x0), y0: fmt(p.seg.y0),
+                                       x1: fmt(p.seg.x1), y1: fmt(p.seg.y1) }));
+  const ne = {};
+  out.forEach((p, i) => { ne[i] = p.kind && p.kind !== "undefined" ? p.kind : "wall"; });
+  draft.edges = ne;
+
+  function identicalLine(A, B){
+    const N1 = normLine(A), N2 = normLine(B);
+    return Math.abs(N1.x0 - N2.x0) < 1e-9 && Math.abs(N1.y0 - N2.y0) < 1e-9 &&
+           Math.abs(N1.x1 - N2.x1) < 1e-9 && Math.abs(N1.y1 - N2.y1) < 1e-9;
+  }
+  function normLine(a){
+    return (a.x0 < a.x1 || (a.x0 === a.x1 && a.y0 <= a.y1))
+      ? { x0: a.x0, y0: a.y0, x1: a.x1, y1: a.y1 }
+      : { x0: a.x1, y0: a.y1, x1: a.x0, y1: a.y0 };
+  }
+}
+
+function segIntersect(a, b){
+  const d1x = a.x1 - a.x0, d1y = a.y1 - a.y0;
+  const d2x = b.x1 - b.x0, d2y = b.y1 - b.y0;
+  const det = d1x*d2y - d1y*d2x;
+  if (Math.abs(det) < 1e-12) return null;
+  const t = ((b.x0 - a.x0)*d2y - (b.y0 - a.y0)*d2x) / det;
+  const u = ((b.x0 - a.x0)*d1y - (b.y0 - a.y0)*d1x) / det;
+  if (t < -1e-9 || t > 1+1e-9 || u < -1e-9 || u > 1+1e-9) return null;
+  return { x: a.x0 + d1x*t, y: a.y0 + d1y*t };
+}
+function pointOnSeg(px, py, s){
+  const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+  const L = Math.hypot(dx, dy);
+  if (L < 1e-9) return false;
+  const t = (Math.abs(dx) > 1e-9) ? (px - s.x0)/dx : (dy? (py - s.y0)/dy : 0);
+  return Math.abs(px - (s.x0 + t*dx)) < 1e-6 && Math.abs(py - (s.y0 + t*dy)) < 1e-6 &&
+         t >= -1e-9 && t <= 1+1e-9;
+}
+
+function nearestExistingJoint(pt, tolM){
+  let best = null, best_d = tolM;
+  for (const p of allJoints()){
+    const d = Math.hypot(p[0]-pt[0], p[1]-pt[1]);
+    if (d < best_d){ best = p; best_d = d; }
+  }
+  return best;
+}
+function chainAt(ev){
+  const L = layout();
+  let base = meters(ev, false);
+  if (curSnap && curSnap.m) base = curSnap.m;         // the previewed snap is the truth
+  // Snap chain endpoints/junctions already present on a wall: this makes sure the split
+  // segment meets them exactly so noding (nodeAllStrokes) actually divides the room.
+  const nearbyJoint = nearestExistingJoint(base, 0.1);
+  if (nearbyJoint) base = nearbyJoint;
+  if (!chain){ chain = { first: [base[0], base[1]], last: [base[0], base[1]] };
+    feedback("chain started — the green ring = existing point, the orange guide = perpendicular to a wall."); return; }
+  // treat a compound snap (or any snap landing on a point coincident with the
+  // chain origin) as a close-joint: a rigid compound vertex can still be used as
+  // the closing anchor even though its kind label is not "joint".
+  const sameAsFirst = Math.hypot(base[0] - chain.first[0], base[1] - chain.first[1]) < 1e-6;
+  if ((curSnap.kind === "joint" && curSnap.ref &&
+       Math.abs(curSnap.ref[0] - chain.first[0]) < 1e-9 &&
+       Math.abs(curSnap.ref[1] - chain.first[1]) < 1e-9) || sameAsFirst){
+    // closed by clicking the first joint again: push the closing stroke
+    // to the EXACT first point (triangles and ngons close like quads)
+    const gap = Math.hypot(chain.last[0] - chain.first[0], chain.last[1] - chain.first[1]);
+    if (gap >= 0.05){
+      draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: chain.first[0], y1: chain.first[1] });
+      nodeAllStrokes();
+    }
+    endChain();
+    feedback("chain closed — " + draft.segments.length + " segments, noding…");
+    return;
+  }
+  if (Math.hypot(base[0] - chain.last[0], base[1] - chain.last[1]) < 0.1) return;
+  draft.segments.push({ x0: chain.last[0], y0: chain.last[1], x1: base[0], y1: base[1] });
+  nodeAllStrokes();
+  chain.last = [base[0], base[1]];
+  if (curSnap.kind === "grid" && curSnap.ref)
+    bindJunction(base, curSnap.ref.id);
+  draw(); noding();
+}
+
+// ── split: point on the line splits it ────────────────────────────────
+function metersRaw(ev){
+  const p = pointerView(ev);
+  const L = layout();
+  const mx = draft.envelope.x0 + (p.x - L.ox) / L.s;
+  const my = draft.envelope.y1 - (p.y - L.oy) / L.s;
+  const cx = Math.min(Math.max(mx, draft.envelope.x0), draft.envelope.x1);
+  const cy = Math.min(Math.max(my, draft.envelope.y0), draft.envelope.y1);
+  return [Math.round(cx * 100) / 100, Math.round(cy * 100) / 100];
+}
+
+function meters(ev, snapLoose){
+  const p = pointerView(ev);
+  const L = layout();
+  const mx = draft.envelope.x0 + (p.x - L.ox) / L.s;
+  const my = draft.envelope.y1 - (p.y - L.oy) / L.s;
+  const cx = Math.min(Math.max(mx, draft.envelope.x0), draft.envelope.x1);
+  const cy = Math.min(Math.max(my, draft.envelope.y0), draft.envelope.y1);
+  const step = snapLoose ? 5 : 1;
+  return [fmt(Math.round(cx / SNAP) * SNAP), fmt(Math.round(cy / SNAP) * SNAP)];
+}
+
+// ── point events ───────────────────────────────────────────────────────
+svg.addEventListener("pointermove", ev => {
+  {
+    if (tool === "draw"){
+      const raw = meters(ev, false);
+      const tolM = 11 / layout().s;   // ~11 px on screen
+      lastRawMForSnap = raw;
+      lastPrevForSnap = chain ? chain.last.slice() : null;
+      lastTolMForSnap = tolM;
+      snapActiveIdx = 0;
+      curSnap = snapPoint(raw, chain ? chain.last : null, tolM, 0);
+      // compound lock: pin the cursor to the rigid point while inside the
+      // escape radius; release once the cursor moves beyond it
+      if (compoundLock){
+        const L = layout();
+        const dpx = Math.hypot((compoundLock.pt[0] - raw[0]) * L.s,
+                               (compoundLock.pt[1] - raw[1]) * L.s);
+        if (dpx > compoundLock.px){ compoundLock = null; }
+        else {
+          curSnap = { m: compoundLock.pt.slice(), kind: "compound", ref: null,
+                      candCount: curSnap.candCount, candIdx: curSnap.candIdx };
+        }
+      }
+      const m = curSnap.m;
+      const [mx, my] = m2vb(m[0], m[1]);
+      const rb = document.getElementById("rubber");
+      if (rb && chain){
+        rb.style.display = "";
+        const [ax, ay] = m2vb(chain.last[0], chain.last[1]);
+        rb.setAttribute("x1", fmt(ax)); rb.setAttribute("y1", fmt(ay));
+        rb.setAttribute("x2", fmt(mx)); rb.setAttribute("y2", fmt(my));
+      } else if (rb){ rb.style.display = "none"; }
+      renderSnapFx(curSnap);
+    } else {
+      renderSnapFx(null);
+      curSnap = { m: null, kind: "free", ref: null };
+    }
+  }
+});
+window.addEventListener("pointermove", ev => {   // window-level: grip survives leaving the canvas
+  if ((tool === "vertex" || tool === "edit") && vertexDrag){
+    withFrame(() => {
+      if (!vertexDrag) return;              // pointerup already settled
+      const [mx, my] = meters(ev, false);
+      if (Math.abs(mx - vertexDrag.work[0]) < 0.05 && Math.abs(my - vertexDrag.work[1]) < 0.05) return;
+      const o = vertexDrag.orig;
+      vertexDrag.work = [mx, my];
+      if (vertexDrag.armSeg >= 0){
+        const s = draft.segments[vertexDrag.armSeg];
+        if (s && (Math.abs(s.x0 - o[0]) < 1e-6 && Math.abs(s.y0 - o[1]) < 1e-6)){ s.x0 = mx; s.y0 = my; }
+        else if (s){ s.x1 = mx; s.y1 = my; }
+      } else vertexDrag.segIdxList.forEach(i => {
+        const s = draft.segments[i];
+        if (Math.abs(s.x0 - o[0]) < 1e-6 && Math.abs(s.y0 - o[1]) < 1e-6){ s.x0 = mx; s.y0 = my; }
+        else if (Math.abs(s.x1 - o[0]) < 1e-6 && Math.abs(s.y1 - o[1]) < 1e-6){ s.x1 = mx; s.y1 = my; }
+        else {
+          const d0 = Math.hypot(s.x0 - o[0], s.y0 - o[1]);
+          const d1 = Math.hypot(s.x1 - o[0], s.y1 - o[1]);
+          if (d0 <= d1){ s.x0 = mx; s.y0 = my; } else { s.x1 = mx; s.y1 = my; }
+        }
+      });
+      draw();
+      runLiveSolve();                                // walls ride the constraints live
+    });
+  }
+});
+window.addEventListener("pointermove", ev => {
+  if (tool === "edit" && edgeDrag){
+    withFrame(() => {
+      if (!edgeDrag) return;                // pointerup already settled
+      const [mx, my] = meters(ev, false);
+      const ed = edgeDrag, orig = ed.orig, curLive = draft.segments[ed.idx];
+      if (ed.axis === "horizontal"){
+        const dy = my - ed.pointerStart[1];
+        const y = orig.y0 + dy;
+        curLive.y0 = y; curLive.y1 = y;
+      } else {
+        const dx = mx - ed.pointerStart[0];
+        const x = orig.x0 + dx;
+        curLive.x0 = x; curLive.x1 = x;
+      }
+      draw();
+      runLiveSolve();
+    });
+  }
+});
+window.addEventListener("pointerup", ev => {
+  if ((tool === "vertex" || tool === "edit") && vertexDrag){
+
+    // drop bindings the moved joint no longer satisfies
+    const o = vertexDrag.orig;
+    draft.bindings = (draft.bindings || []).filter(b => {
+      const onLine = (helperLines().find(h => h.id === b.line) || {}).pos;
+      if (onLine === undefined) return true;
+      const was = Math.hypot(o[0] - b.junction.x, o[1] - b.junction.y) < 0.1;
+      const now = Math.hypot(vertexDrag.work[0] - b.junction.x, vertexDrag.work[1] - b.junction.y) < 0.1;
+      if (!was) return true;
+      return Math.abs(onLine - now) < 1e-6 ? true
+        : (Math.max(Math.abs(o[0] - vertexDrag.work[0]), Math.abs(o[1] - vertexDrag.work[1])) > 0.25
+             ? false : true);
+    });
+    if (selection && selection.type === "joint") selection.pt = vertexDrag.work.slice();
+    vertexDrag = null;
+    draw(); noding();
+    nodeAllStrokes();
+    flushLiveSolve();   // settle the dragged solution immediately
+    feedback("joint moved — live solution refreshed.");
+  }
+});
+window.addEventListener("pointerup", ev => {
+  if (tool === "edit" && edgeDrag){
+    edgeDrag = null;
+    draw(); noding();
+    nodeAllStrokes();
+    flushLiveSolve();
+    feedback("edge moved — live solution refreshed.");
+  }
+});
+svg.addEventListener("click", ev => {
+  if (tool === "edit"){
+    const pt = meters(ev, false);
+    const tol = 12 / layout().s;
+    const joints = allJoints();
+    let selJoint = null, jd = tol;
+    for (const jp of joints){
+      const d = Math.hypot(jp[0]-pt[0], jp[1]-pt[1]);
+      if (d < jd){ selJoint = jp; jd = d; }
+    }
+    let selEdge = null, ed = tol;
+    draft.segments.forEach((seg, idx) => {
+      const pr = projectOnSeg(pt, seg);
+      if (pr && pr.dist < ed){ selEdge = idx; ed = pr.dist; }
+    });
+    let selFace = currentFaces().find(f =>
+      pointInPoly(pt, f.verts));
+    // ── explicit edit sub-mode: selection type is WHAT YOU SUB-MODE-PICKED,
+    // not inferred from what happens to be under the cursor (Blender-style 1/2/3)
+    if (editMode === "edge"){
+      selJoint = null; selFace = null;      // edge mode sees only edges
+    } else if (editMode === "face"){
+      selJoint = null; selEdge = null;      // face mode sees only faces
+    } else {
+      selEdge = null; selFace = null;       // vertex mode sees only vertices
+    }
+    if (selJoint){
+      selection = { type: "joint", pt: selJoint.slice(), segs: [...(svg._joints ? svg._joints.get(selJoint.join(",")) ? [] : [] : [])] };
+      // find joints key
+      for (const [k, idxList] of (svg._joints || new Map())){
+        if (k === selJoint.join(",")){ selection.segs = idxList.slice(); break; }
+      }
+      document.getElementById("selInfo").textContent = "vertex [" + selJoint.map(v => fmt(v)).join(", ") + "]\u00b7 " + selection.segs.length + " strokes";
+      document.getElementById("edgeActions").style.display = "none";
+      document.getElementById("vtxActions").style.display = "block";
+      document.getElementById("face-form") && 0;
+    } else if (selEdge !== null){
+      selection = { type: "edge", idx: selEdge };
+      const seg = draft.segments[selEdge];
+      document.getElementById("selInfo").textContent = "edge " + selEdge + " (" + fmt(Math.hypot(seg.x1-seg.x0, seg.y1-seg.y0)) + " m) " + (draft.edges[selEdge] || draft.edges[String(selEdge)] || "wall");
+      document.getElementById("edgeActions").style.display = "block";
+      document.getElementById("vtxActions").style.display = "none";
+      const ek = document.getElementById("edgeKind");
+      ek.value = (draft.edges[selEdge] != null ? draft.edges[selEdge] : draft.edges[String(selEdge)] || "wall");
+    } else if (selFace){
+      selection = { type: "face", face: selFace };
+      pendingTag = selFace;
+      fKey.value = selFace.key || suggestedKey();
+      fLbl.value = selFace.label || "";
+      fRegionName.value = selFace.name || "";
+      fRegionDescr.value = selFace.description || "";
+      fItems.value = (selFace.items || []).join(", ");
+      fAmin.value = selFace.area_min ?? "";
+      fAmax.value = selFace.area_max ?? "";
+      const c = selFace.color && selFace.color !== "auto" ? selFace.color : "#9fc6e8";
+      fColor.value = c; fColorUse.checked = Boolean(selFace.color && selFace.color !== "auto");
+      fColor.disabled = false; fColorUse.disabled = false;
+      document.getElementById("regionInfo").textContent = "index " + selFace.index + " \u00b7 " + fmt(selFace.area) + " m2";
+      document.getElementById("selInfo").textContent = "face #" + selFace.index + " (" + selFace.key + ")";
+      document.getElementById("edgeActions").style.display = "none";
+      document.getElementById("vtxActions").style.display = "none";
+    } else {
+      selection = null;
+      document.getElementById("selInfo").textContent = "nothing selected";
+      document.getElementById("edgeActions").style.display = "none";
+      document.getElementById("vtxActions").style.display = "none";
+    }
+    draw();
+    return;
+  }
+  const m = meters(ev, false);
+  if (tool === "grid"){
+    const h = draft.helpers || (draft.helpers = { master: null, lines: [] });
+    if (!h.master){
+      const axis = gAxis.value;
+      h.master = { axis, pos: (axis === "vertical" ? m[0] : m[1]), module: draft.grid };
+      feedback("master placed — click again for derived lines at module multiples.");
+    } else {
+      const axis = h.master.axis;
+      const perp = axis === "vertical" ? m[0] : m[1];
+      const k = Math.round((perp - h.master.pos) / h.master.module);
+      if (k === 0){ feedback("that is the master line itself — nothing to add."); return; }
+      const id = "L" + (h.lines.length + 1);
+      h.lines.push({ id, axis, offset: fmt(k * h.master.module) });
+      const colId = id;
+      feedback(colId + " at master + " + fmt(k * h.master.module) +
+        " m (module multiple) — drawn junctions that snap onto it bind automatically.");
+    }
+    draw(); refreshHelperList();
+  }
+  if (tool === "draw") chainAt(ev);
+});
+svg.addEventListener("dblclick", () => { if (tool === "draw" && chain) endChain(); });
+svg.addEventListener("pointercancel", clearDragState);
+window.addEventListener("pointercancel", clearDragState);
+svg.addEventListener("lostpointercapture", ev => { if (!edgeDrag) clearDragState(); });
+
+// ── tolerant edit-mode vertex drag (root handler, survives narrow dots) ─
+svg.addEventListener("pointerdown", ev => {
+  if (tool !== "edit" || editMode !== "vertex" || ev.button !== 0) return;
+  const pt = metersRaw(ev);
+  const tol = Math.max(0.3, 14 / layout().s);
+  let joint = null, best_d = tol;
+  for (const jp of allJoints()){
+    const d = Math.hypot(jp[0]-pt[0], jp[1]-pt[1]);
+    if (d < best_d){ joint = jp; best_d = d; }
+  }
+  if (!joint) return;                       // let click handler select edge/face
+  ev.stopImmediatePropagation();
+  vertexDrag = { orig: [joint[0], joint[1]], work: [joint[0], joint[1]],
+                segIdxList: ((svg._joints || new Map()).get(joint.join(",")) || []),
+                armSeg: -1 };
+  selection = { type: "joint", pt: joint.slice(), segs: vertexDrag.segIdxList.slice() };
+  if (selection.segs.length === 0){
+    for (const [k, idxList] of (svg._joints || new Map()))
+      if (k === joint.join(",")) selection.segs = idxList.slice();
+  }
+  document.getElementById("selInfo").textContent = "vertex [" + joint.map(fmt).join(", ") + "] · " +
+    (selection.segs.length || 0) + " strokes";
+  document.getElementById("edgeActions").style.display = "none";
+  document.getElementById("vtxActions").style.display = "block";
+  safePointerCapture(svg, ev);
+  draw();
+  feedback("dragging vertex [" + joint.map(fmt).join(", ") + "]");
+}, true);
+
+// ── interactive drag re-solve ─────────────────────────────────────────
+
+let liveSeq = 0;
+function solvedHints(){
+  const solved = draft._solved;
+  if (!solved || !solved.junctions) return null;
+  return solved.junctions.map(j => ({ orig: j.orig, solved: j.solved }));
+}
+// one request in flight, one timer slot: drag frames coalesce into a
+// trailing solve at most 140 ms apart, pointerup flushes immediately,
+// and only the newest response is painted (seq guard)
+const liveState = { busy: false, last: 0, timer: 0 };
+function scheduleLive(force){
+  if (liveState.timer){ clearTimeout(liveState.timer); liveState.timer = 0; }
+  const delay = force ? 0 : Math.max(0, liveState.last + 140 - performance.now());
+  liveState.timer = setTimeout(() => {
+    liveState.timer = 0;
+    liveSolve();
+  }, delay);
+}
+async function liveSolve(){
+  if (liveState.busy){ scheduleLive(true); return; }   // retry after the flight
+  const seq = ++liveSeq;
+  liveState.busy = true;
+  liveState.last = performance.now();
+  readDraft();
+  try {
+    const r = await fetch(API + "/templates/graph/solve", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft, hints: solvedHints(), budget: 0.3 }),
+    });
+    const j = await r.json();
+    if (seq !== liveSeq) return;                    // stale response
+    if (j.junctions && (j.status === "solved" || j.status === "budget")){
+      draft._solved = { junctions: j.junctions, faces: j.faces };
+      draw();                                       // blue-dashed live ghost
+    }
+  } finally {
+    liveState.busy = false;
+  }
+}
+function runLiveSolve(){ if (tool === "vertex") scheduleLive(false); }
+function flushLiveSolve(){ if (tool === "vertex") scheduleLive(true); }
+
+
+// ── noding + tags ──────────────────────────────────────────────────────
+async function noding(){
+  readDraft();
+  const r = await fetch(API + "/templates/graph/noding", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  if (!r.ok){ const j = await r.json().catch(() => ({})); feedback("noding failed: " + (j.detail || r.status)); return null; }
+  const j = await r.json();
+  draft._faces = j.faces || [];
+  draw();
+  feedback(((j.errors || []).length ? "draft errors:\n" + j.errors.join("\n") : "regions: " + (j.faces || []).length) +
+    "\n" + (j.faces || []).map(f => `#${f.index} ${f.label || "?"} ${fmt(f.area)} m2${f.matched ? "" : " (unlabelled)"}`).join("\n"));
+  return j.faces;
+}
+function readDraft(){
+  draft.name = fName.value.trim(); draft.description = fDescr.value;
+  draft.grid = Number(fGrid.value) || 3.3;
+  draft.envelope = { x0: 0, y0: 0, x1: Number(fEx.value) || 40, y1: Number(fEy.value) || 26 };
+}
+
+// face tagging: apply panel to the clicked region (nearest-centroid match)
+document.getElementById("btnTag").addEventListener("click", () => {
+  if (!pendingTag){ feedback("click a region with the ▦ tool first."); return; }
+  const tag = {
+    key: fKey.value.trim() || suggestedKey(),
+    label: fLbl.value.trim(),
+    name: fRegionName.value.trim(),
+    description: fRegionDescr.value.trim(),
+    items: fItems.value.split(",").map(s => s.trim()).filter(Boolean),
+    area_min: fAmin.value === "" ? null : Number(fAmin.value),
+    area_max: fAmax.value === "" ? null : Number(fAmax.value),
+    color: fColorUse.checked ? fColor.value : null,
+    centroid: pendingTag.centroid,
+  };
+  draft.faces = draft.faces.filter(f =>
+    Math.hypot(f.centroid[0] - tag.centroid[0], f.centroid[1] - tag.centroid[1]) > 0.5);
+  draft.faces.push(tag);
+  draw(); noding();
+  feedback("tagged '" + tag.label + "' " + tag.key + " items " + tag.items.join(","));
+});
+document.getElementById("btnClearTag").addEventListener("click", () => {
+  if (!pendingTag){ feedback("no region selected."); return; }
+  draft.faces = draft.faces.filter(f =>
+    Math.hypot(f.centroid[0] - pendingTag.centroid[0], f.centroid[1] - pendingTag.centroid[1]) > 0.5);
+  pendingTag = null; draw(); noding();
+  feedback("tag cleared.");
+});
+
+// ── edit selected geometry ─────────────────────────────────────────
+document.getElementById("btnApplyKind").addEventListener("click", () => {
+  if (!selection || selection.type !== "edge"){ feedback("select an edge first (edit tool)."); return; }
+  const i = selection.idx;
+  const kind = document.getElementById("edgeKind").value;
+  if (kind === "door"){
+    const s = draft.segments[i];
+    const run = Math.hypot(s.x1 - s.x0, s.y1 - s.y0);
+    if (run < 1.2 - 1e-9){ feedback("edge is only " + fmt(run) + " m long — needs 1.20 m."); return; }
+  }
+  draft.edges[i] = kind;
+  if (draft.edges[String(i)] != null) delete draft.edges[String(i)];
+  draw(); noding();
+  feedback("edge " + i + " classified as " + kind + ".");
+});
+document.getElementById("btnDelEdge").addEventListener("click", () => {
+  if (!selection || selection.type !== "edge"){ feedback("select an edge first (edit tool)."); return; }
+  const idx = selection.idx;
+  draft.edges = Object.fromEntries(Object.entries(draft.edges)
+    .map(([k, v]) => [String(Number(k) >= idx ? Number(k) - 1 : Number(k)), v])
+    .filter(([k]) => Number(k) !== -1));
+  draft.segments.splice(idx, 1);
+  selection = null;
+  draw(); noding();
+  nodeAllStrokes();
+  document.getElementById("selInfo").textContent = "nothing selected";
+  document.getElementById("edgeActions").style.display = "none";
+  feedback("edge deleted.");
+});
+
+// ── drafts ─────────────────────────────────────────────────────────────
+async function refreshList(){
+  const list = await (await fetch(API + "/templates/graph/drafts")).json();
+  document.getElementById("drafts").innerHTML =
+    (list || []).map(n => `<li data-n="${n}">${n}</li>`).join("") || "<li><i>(none)</i></li>";
+  document.querySelectorAll("#drafts li").forEach(li => li.addEventListener("click", async () => {
+    const r = await fetch(API + "/templates/graph/drafts/" + li.dataset.n);
+    if (!r.ok){ feedback("load failed."); return; }
+    const d = await r.json();
+    draft = Object.assign(d, { _faces: [] });
+    fName.value = d.name; fDescr.value = d.description || "";
+    fEx.value = d.envelope.x1; fEy.value = d.envelope.y1; fGrid.value = d.grid;
+    draw(); noding(); feedback("loaded " + d.name);
+  }));
+}
+document.getElementById("btnSave").addEventListener("click", async () => {
+  readDraft();
+  const r = await fetch(API + "/templates/graph/drafts/" + draft.name, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  const j = await r.json();
+  feedback("saved " + draft.name + ((j.errors || []).length ? "\nerrors:\n" + j.errors.join("\n") : "\nclean") );
+  refreshList();
+});
+document.getElementById("btnRefresh").addEventListener("click", refreshList);
+document.getElementById("btnPreview").addEventListener("click", async () => {
+  readDraft();
+  const r = await fetch(API + "/templates/graph/preview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  if (!r.ok){ feedback("render failed: HTTP " + r.status); return; }
+  document.getElementById("preview").innerHTML =
+    (await r.text()).replace("<svg ", '<svg style="width:100%" ');
+});
+document.getElementById("btnDelDraft").addEventListener("click", () => {
+  feedback("deleting drafts: use the file store dir for now (wip toolhouse).");
+});
+async function solveDraft(){
+  readDraft();
+  const r = await fetch(API + "/templates/graph/solve", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ draft }) });
+  if (!r.ok){ const j = await r.json().catch(() => ({})); feedback("solve failed: " + (j.detail || r.status)); return; }
+  const j = await r.json();
+  draft._solved = (j.status && j.junctions) ? { junctions: j.junctions, faces: j.faces } : null;
+  const hits = (j.faces || []).filter(f => f.ok).length;
+  feedback((j.status || "?") +
+    (j.errors && j.errors.length ? "\nerrors:\n" + j.errors.join("\n") : "") +
+    "\nregions in band: " + hits + "/" + (j.faces || []).length +
+    (j.faces || []).map(f => `\n  ${(f.label || f.key || "untagged")}: ${fmt(f.area)} m2` +
+      (f.ok ? "" : ` — band ${f.band ? fmt(f.band[0]) + ".." + fmt(f.band[1]) : "none"}`)) +
+    "\nblue dashed = solved sketch; ⤓ apply writes it into the draft.");
+  draw();
+}
+document.getElementById("btnSolve").addEventListener("click", solveDraft);
+document.getElementById("btnApply").addEventListener("click", () => {
+  const solved = draft._solved;
+  if (!solved){ feedback("solve first."); return; }
+  const S = new Map(solved.junctions.map(j => [j.orig.join(","), j.solved]));
+  draft.segments = draft.segments.map(seg => {
+    const a = S.get([seg.x0, seg.y0].join(",")), b = S.get([seg.x1, seg.y1].join(","));
+    return a && b ? { x0: fmt(a[0]), y0: fmt(a[1]), x1: fmt(b[0]), y1: fmt(b[1]) } : seg;
+  });
+  draft._solved = null;
+  nodeAllStrokes();
+  feedback("solution applied to the draft — bands should read ✓ on a re-solve.");
+});
+document.getElementById("btnClearSolved").addEventListener("click", () => {
+  draft._solved = null; draw(); feedback("solution overlay cleared.");
+});
+let showDims = false;
+document.getElementById("btnDims").addEventListener("click", () => {
+  showDims = !showDims;
+  const b = document.getElementById("btnDims");
+  b.classList.toggle("active", showDims);
+  b.textContent = showDims ? "\u22a0 dims (on)" : "\U0001F4CF dims";
+  draw();
+  feedback(showDims ? "dimension lines on." : "dimension lines off.");
+});
+function feedback(msg){ document.getElementById("feedback").textContent = msg; }
+
+// the v1 harness, run on this drawing: conform + quality metrics over a
+// projected labelled skeleton, ensembles as aggregate, doors as drawn
+const DEMO_PVE = {
+  nodes: {
+    "A1-woon": { area_min: 640, area_max: 680 },
+    "A1-bad": { area_min: 170, area_max: 190, wet: true },
+    "A1-keuken": { area_min: 180, area_max: 200, wet: true },
+    "buiten": { exterior: true },
+  },
+  edges: [
+    { a: "A1-woon", b: "A1-bad", kind: "door" },
+    { a: "A1-woon", b: "buiten", kind: "facade" },
+  ],
+};
+async function gateDraft(){
+  let program;
+  try { program = JSON.parse(document.getElementById("pveJson").value.trim()); }
+  catch (e){ feedback("program JSON invalid: " + e.message); return; }
+  readDraft();
+  const r = await fetch(API + "/templates/graph/gate", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ draft, program, hints: solvedHints() }),
+  });
+  if (!r.ok){
+    const j = await r.json().catch(() => ({}));
+    feedback("gate failed: " + (j.detail || r.status));
+    return;
+  }
+  const j = await r.json();
+  const c = j.conform || {}, m = j.metrics || {}, d = j.doors || {};
+  const lines = ["status: " + j.status +
+    ` · doors ${d.drawn || 0} drawn, ${d.blocked || 0} blocked, ${d.separated || 0} separated`];
+  (j.faces || []).filter(f => f.label_key)
+    .forEach(f => lines.push("✓ " + f.label_key + ": " + fmt(f.area) + " m2"));
+  (j.ensembles || []).forEach(e => lines.push((e.ok ? "✓ " : "✗ ") + "ensemble " +
+    e.keys.join(" + ") + ": " + fmt(e.area) + " m2 vs Σ band " +
+    fmt(e.band[0]) + ".." + fmt(e.band[1]) + " m2"));
+  (c.violated || []).forEach(v => lines.push("✗ " + v));
+  (c.missing || []).forEach(v => lines.push("✗ missing " + v));
+  const ac = m.access_components || {};
+  if (ac.components > 1) lines.push("! access graph: " + ac.components +
+    " components - unreachable from " + ac.root + ": " + ac.unreachable.join(", "));
+  if (m.fill_ratio != null) lines.push("fill " + fmt(m.fill_ratio) +
+    " · facade ratio " + fmt(m.facade_ratio) +
+    (m.escape_depth && Object.keys(m.escape_depth).length ? " · escape depths " + JSON.stringify(m.escape_depth) : ""));
+  (j.notes || []).forEach(n => lines.push("· " + n));
+  document.getElementById("gateList").innerHTML =
+    lines.map(l => "<li>" + l + "</li>").join("");
+  feedback("gate " + j.status + " — " + (c.satisfied || []).length + " satisfied, " +
+    (c.violated || []).length + " violated, " + (c.missing || []).length + " missing.");
+}
+document.getElementById("btnGate").addEventListener("click", gateDraft);
+
+[fEx, fEy, fGrid].forEach(i => i.addEventListener("change", () => { readDraft(); draw(); noding(); refreshHelperList();
+if (demo) solveDraft(); }));
+window.addEventListener("resize", () => draw());
+window.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && chain){ endChain(); ev.preventDefault(); return; }
+  if (ev.key !== "Tab" || tool !== "draw") return;
+  ev.preventDefault();
+  if (compoundLock){ compoundLock = null; }   // first Tab exits the compound
+  if (!lastRawMForSnap || !chain) return;
+  snapActiveIdx = snapCandidates.length ? (snapActiveIdx + (ev.shiftKey ? -1 : 1) + snapCandidates.length) % snapCandidates.length : 0;
+  curSnap = snapPoint(lastRawMForSnap, lastPrevForSnap, lastTolMForSnap, snapActiveIdx);
+  renderSnapFx(curSnap);
+});
+
+const demo = new URLSearchParams(location.search).has("demo");
+if (demo){
+  draft.segments = [
+    { x0: 0, y0: 0, x1: 40, y1: 0 }, { x0: 40, y0: 0, x1: 40, y1: 26 },
+    { x0: 40, y0: 26, x1: 0, y1: 26 }, { x0: 0, y0: 26, x1: 0, y1: 0 },
+    // the divider with a drawn passage (access) in it: that stroke is what
+    // realises the program door between living and wet
+    { x0: 0, y0: 10, x1: 14, y1: 10 }, { x0: 14, y0: 10, x1: 20, y1: 10 },
+    { x0: 20, y0: 10, x1: 40, y1: 10 },
+  ];
+  draft.edges = { "0": "facade", "1": "facade", "2": "facade", "3": "facade",
+                  "5": "access" };
+  draft.faces = [
+    { key: "living", label: "living", items: ["*-woon"], area_min: 640, area_max: 680, centroid: [20, 18] },
+    { key: "wet", label: "wet", items: ["*-bad", "keuken.*"], area_min: 370, area_max: 390, centroid: [20, 5] },
+  ];
+}
+readDraft(); draw(); noding(); refreshHelperList();
+if (demo){
+  document.getElementById("pveJson").value = JSON.stringify(DEMO_PVE, null, 1);
+  solveDraft().then(gateDraft);
+}
+</script>
+
+
+
+
+</body>
+</html>

@@ -62,7 +62,9 @@ def _label_by_x(sd, labels: dict) -> None:
 
 
 def test_fill_ratio_full_and_half():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]]
+    )
     full = [(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]
     assert fill_ratio(sd, full) == pytest.approx(1.0)
     half = [(0.0, 0.0), (10.0, 0.0), (10.0, 12.0), (0.0, 12.0)]
@@ -70,7 +72,9 @@ def test_fill_ratio_full_and_half():
 
 
 def test_fill_ratio_rejects_empty_boundary():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]]
+    )
     with pytest.raises(ValueError):
         fill_ratio(sd, [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0)])
 

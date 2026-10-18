@@ -46,7 +46,9 @@ def test_door_pairs_empty_then_door():
 
 
 def test_single_room_no_adjacency():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]]
+    )
     g = space_adjacency(sd)
     assert list(g.edges()) == []
 
@@ -94,7 +96,9 @@ def test_wall_segments_functions():
 
 
 def test_wall_segments_without_program():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]]
+    )
     segs = wall_segments(sd)
     assert segs and all(s.function == "buitengevel" for s in segs)
     assert all(s.edge is None for s in segs)

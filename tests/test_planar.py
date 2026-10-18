@@ -49,12 +49,16 @@ def test_from_faces_two_rooms():
     sd = PlanarSubdivision.from_faces(_two_room_faces())
     assert len(sd.bounded_faces()) == 2
     assert len(sd.faces) == 3  # 2 begrensd + exterior
-    assert sorted(sd.face_area(f) for f in sd.bounded_faces()) == pytest.approx([24.0, 36.0])
+    assert sorted(sd.face_area(f) for f in sd.bounded_faces()) == pytest.approx(
+        [24.0, 36.0]
+    )
     assert sd.shared_edge(0, 1) is not None
 
 
 def test_single_room_perimeter():
-    sd = PlanarSubdivision.from_faces([[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]])
+    sd = PlanarSubdivision.from_faces(
+        [[(0.0, 0.0), (10.0, 0.0), (10.0, 6.0), (0.0, 6.0)]]
+    )
     assert sd.bounded_faces() == [0]
     assert sd.perimeter_faces() == {0}
     assert sd.face_area(0) == pytest.approx(60.0)

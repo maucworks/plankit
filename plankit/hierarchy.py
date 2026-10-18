@@ -123,9 +123,7 @@ def _side_origins(bbox: Rect, side: str, w: float, h: float, step: float = 0.5):
             t += step
 
 
-def _shared_segment(
-    a: Rect, b: Rect
-) -> tuple[float, float, float, float] | None:
+def _shared_segment(a: Rect, b: Rect) -> tuple[float, float, float, float] | None:
     """Langste overlappende collineaire span tussen twee blokken (of None)."""
     best: tuple[float, tuple[float, float, float, float]] | None = None
     if abs(a[2] - b[0]) <= 1e-9 or abs(b[2] - a[0]) <= 1e-9:
@@ -141,7 +139,9 @@ def _shared_segment(
     return best[1] if best is not None else None
 
 
-def _shared_segments(blocks: dict[str, Rect]) -> dict[tuple[str, str], tuple[float, float]]:
+def _shared_segments(
+    blocks: dict[str, Rect],
+) -> dict[tuple[str, str], tuple[float, float]]:
     """Middens van gedeelde blokranden (langste per paar), beide richtingen."""
     out: dict[tuple[str, str], tuple[float, float]] = {}
     keys = list(blocks)
@@ -304,6 +304,7 @@ def topology_coarse(
         s: shape_for_area(max(_supernode_area(program, members[s]) * OVERSIZE, 1e-9))
         for s in members
     }
+
     def _size(s: str) -> float:
         w, h = sizes[s]
         return w * h
@@ -349,9 +350,7 @@ def topology_coarse(
                 if any(_rects_overlap(cand, r) for r in rects.values()):
                     continue
                 contact = sum(
-                    _shared_wall(cand, rects[o])
-                    for o in rects
-                    if o in links[key]
+                    _shared_wall(cand, rects[o]) for o in rects if o in links[key]
                 )
                 cands.append((contact, cand))
         inside = [c for c in cands if inside_box(c[1])]
@@ -405,7 +404,12 @@ def skyline_coarse(
     is_core = set(core)
     order = sorted(
         members,
-        key=lambda s: (-len(links[s]), 0 if s in is_core else 1, -_area_of(sizes[s][0]), s),
+        key=lambda s: (
+            -len(links[s]),
+            0 if s in is_core else 1,
+            -_area_of(sizes[s][0]),
+            s,
+        ),
     )
     if not members:
         raise ValueError("skyline_coarse: geen ruimten om te plaatsen")
@@ -450,7 +454,9 @@ def skyline_coarse(
 
     for key in order:
         placing_key = key
-        scored = [s for s in (skyline_place(w, h) for w, h in sizes[key]) if s is not None]
+        scored = [
+            s for s in (skyline_place(w, h) for w, h in sizes[key]) if s is not None
+        ]
         if not rects:
             # hub-privilege: eerst onder-centraal (alleen als het past)
             fw, fh = sizes[key][0]
@@ -498,7 +504,9 @@ def _anchor_against(
     best: tuple[tuple, Rect] | None = None
     for cap in (1.5, 1.0):
         for landscape in (True, False):
-            w, h = shape_for_area(area, max_aspect=cap, landscape=landscape, min_width=min_width)
+            w, h = shape_for_area(
+                area, max_aspect=cap, landscape=landscape, min_width=min_width
+            )
             if vertical:
                 ox = seg[0] - w if left_or_below else seg[0]
                 oy = min(max(seg_mid - h / 2.0, block[1]), block[3] - h)
@@ -521,7 +529,11 @@ def _anchor_against(
                 overlap = max(0.0, min(ox + w, seg_hi) - max(ox, seg_lo))
                 extent = w
                 spans = h >= span_need
-            key = ((1 if spans else 0), round(overlap, 1), extent) if span else (round(overlap, 1), extent)
+            key = (
+                ((1 if spans else 0), round(overlap, 1), extent)
+                if span
+                else (round(overlap, 1), extent)
+            )
             if best is None or key > best[0]:
                 best = (key, cand)
     if best is None:
@@ -568,7 +580,9 @@ def _anchor_toward(
 
     for cap in (1.5, 1.0):
         for landscape in (True, False):
-            w, h = shape_for_area(area, max_aspect=cap, landscape=landscape, min_width=min_width)
+            w, h = shape_for_area(
+                area, max_aspect=cap, landscape=landscape, min_width=min_width
+            )
             if vertical:
                 extent = h
                 origins = [(seg[0] - w, None), (seg[0], None)]
@@ -578,12 +592,18 @@ def _anchor_toward(
             for ox_opt, oy_opt in origins:
                 if vertical:
                     assert ox_opt is not None
-                    oy = min(max((fixed[1] + fixed[3]) / 2.0 - h / 2.0, block[1]), block[3] - h)
+                    oy = min(
+                        max((fixed[1] + fixed[3]) / 2.0 - h / 2.0, block[1]),
+                        block[3] - h,
+                    )
                     cand = (ox_opt, oy, ox_opt + w, oy + h)
                     overlap = max(0.0, min(oy + h, fixed[3]) - max(oy, fixed[1]))
                 else:
                     assert oy_opt is not None
-                    ox = min(max((fixed[0] + fixed[2]) / 2.0 - w / 2.0, block[0]), block[2] - w)
+                    ox = min(
+                        max((fixed[0] + fixed[2]) / 2.0 - w / 2.0, block[0]),
+                        block[2] - w,
+                    )
                     cand = (ox, oy_opt, ox + w, oy_opt + h)
                     overlap = max(0.0, min(ox + w, fixed[2]) - max(ox, fixed[0]))
                 if not inside(cand):
@@ -662,25 +682,51 @@ def _anchor_pairs(
         if a_anchored and b_anchored:
             done.add(pair)
             if _shared_wall(anchors[edge.a], anchors[edge.b]) <= 1e-9:
-                issues.append(f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand")
+                issues.append(
+                    f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand"
+                )
             continue
         if not a_anchored and not b_anchored:
             vertical = abs(seg[0] - seg[2]) <= 1e-9
             ra = blocks[sa]
-            a_left = (ra[2] <= blocks[sb][0] + 1e-9) if vertical else (ra[3] <= blocks[sb][1] + 1e-9)
-            rect_a = _anchor_against(area_a, seg, blocks[sa], a_left, mw.get(edge.a), span_map.get(edge.a, False))
-            rect_b = _anchor_against(area_b, seg, blocks[sb], not a_left, mw.get(edge.b), span_map.get(edge.b, False))
+            a_left = (
+                (ra[2] <= blocks[sb][0] + 1e-9)
+                if vertical
+                else (ra[3] <= blocks[sb][1] + 1e-9)
+            )
+            rect_a = _anchor_against(
+                area_a,
+                seg,
+                blocks[sa],
+                a_left,
+                mw.get(edge.a),
+                span_map.get(edge.a, False),
+            )
+            rect_b = _anchor_against(
+                area_b,
+                seg,
+                blocks[sb],
+                not a_left,
+                mw.get(edge.b),
+                span_map.get(edge.b, False),
+            )
             if rect_a is None or rect_b is None:
                 issues.append(f"paar {edge.a}-{edge.b} past niet aan gedeelde rand")
                 done.add(pair)
                 continue
             clash = any(
-                _rects_overlap(rect_a, r) for k, r in anchors.items() if room_super[k] == sa
+                _rects_overlap(rect_a, r)
+                for k, r in anchors.items()
+                if room_super[k] == sa
             ) or any(
-                _rects_overlap(rect_b, r) for k, r in anchors.items() if room_super[k] == sb
+                _rects_overlap(rect_b, r)
+                for k, r in anchors.items()
+                if room_super[k] == sb
             )
             if clash or _shared_wall(rect_a, rect_b) <= 1e-9:
-                issues.append(f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand")
+                issues.append(
+                    f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand"
+                )
                 done.add(pair)
                 continue
             anchors[edge.a], anchors[edge.b] = rect_a, rect_b
@@ -705,7 +751,9 @@ def _anchor_pairs(
             for k, r in anchors.items()
             if room_super[k] == room_super[mover]
         )
-        if clash or (mover_rect is not None and _shared_wall(mover_rect, fixed) <= 1e-9):
+        if clash or (
+            mover_rect is not None and _shared_wall(mover_rect, fixed) <= 1e-9
+        ):
             issues.append(f"paar {edge.a}-{edge.b} zonder overlap aan gedeelde rand")
             done.add(pair)
             continue
@@ -766,7 +814,9 @@ def two_step(
     }
     proposal: dict[str, list[Vec]] = {}
     issues: list[str] = []
-    anchors, anchor_issues, intended = _anchor_pairs(program, members, blocks, min_widths)
+    anchors, anchor_issues, intended = _anchor_pairs(
+        program, members, blocks, min_widths
+    )
 
     def boxes_of(prop: dict[str, list[Vec]]) -> dict[str, Rect]:
         boxes: dict[str, Rect] = {}
@@ -784,7 +834,9 @@ def two_step(
             room_keys = members[superkey]
             sub_attractors = {k: attractors[k] for k in room_keys if k in attractors}
             sub_placed = (
-                {k: anchors[k] for k in room_keys if k in anchors} if use_anchors else {}
+                {k: anchors[k] for k in room_keys if k in anchors}
+                if use_anchors
+                else {}
             )
             fine = propose_magnet(
                 _sub_program(program, room_keys),
@@ -836,12 +888,9 @@ def two_step(
     else:
         proposal, issues = prop_a, env_a
     boxes = boxes_of(proposal)
-    ok_pairs = {
-        (a, b) for a, b in intended if _shared_wall(boxes[a], boxes[b]) > 1e-9
-    }
+    ok_pairs = {(a, b) for a, b in intended if _shared_wall(boxes[a], boxes[b]) > 1e-9}
     pair_issues = [i for i in anchor_issues]
     issues.extend(
-        i for i in pair_issues
-        if not any(f"paar {a}-{b}" in i for a, b in ok_pairs)
+        i for i in pair_issues if not any(f"paar {a}-{b}" in i for a, b in ok_pairs)
     )
     return proposal, sorted(set(issues))

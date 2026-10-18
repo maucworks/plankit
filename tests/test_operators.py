@@ -95,10 +95,20 @@ def test_split_footprint_rejects():
 def test_mirror_footprint():
     rect = [Vec(0, 0), Vec(6, 0), Vec(6, 4), Vec(0, 4)]
     m = mirror_footprint(rect, "x", 10.0)
-    assert [(p.x, p.y) for p in m] == [(20.0, 4.0), (14.0, 4.0), (14.0, 0.0), (20.0, 0.0)]
+    assert [(p.x, p.y) for p in m] == [
+        (20.0, 4.0),
+        (14.0, 4.0),
+        (14.0, 0.0),
+        (20.0, 0.0),
+    ]
     assert _area(m) == pytest.approx(_area(rect))  # winding behouden
     m2 = mirror_footprint(rect, "y", 5.0)
-    assert [(p.x, p.y) for p in m2] == [(0.0, 6.0), (6.0, 6.0), (6.0, 10.0), (0.0, 10.0)]
+    assert [(p.x, p.y) for p in m2] == [
+        (0.0, 6.0),
+        (6.0, 6.0),
+        (6.0, 10.0),
+        (0.0, 10.0),
+    ]
     with pytest.raises(ValueError):
         mirror_footprint(rect, "z", 0.0)
 
@@ -326,7 +336,9 @@ def test_propose_magnet_flags_keep_determinism():
 
 def test_propose_magnet_first_room_to_attractor_corner():
     prog = RoomProgram(nodes={"w": ProgramSpace(name="W", area_min=6)}, edges=[])
-    out = propose_magnet(prog, seed=0, bounds=(0.0, 0.0, 10.0, 10.0), attractors={"w": (5.0, 10.0)})
+    out = propose_magnet(
+        prog, seed=0, bounds=(0.0, 0.0, 10.0, 10.0), attractors={"w": (5.0, 10.0)}
+    )
     box = _bbox(out["w"])
     assert box[3] == pytest.approx(10.0)  # raakt de bovenrand bij de attractor
 
@@ -376,7 +388,12 @@ def _two_rects():
 def test_move_room_translates_and_keeps_input():
     prop = _two_rects()
     out = move_room(prop, "a", 2.0, -1.0)
-    assert [(p.x, p.y) for p in out["a"]] == [(2.0, -1.0), (6.0, -1.0), (6.0, 2.0), (2.0, 2.0)]
+    assert [(p.x, p.y) for p in out["a"]] == [
+        (2.0, -1.0),
+        (6.0, -1.0),
+        (6.0, 2.0),
+        (2.0, 2.0),
+    ]
     assert prop["a"][0].x == 0.0  # invoer ongewijzigd
     with pytest.raises(KeyError):
         move_room(prop, "zzz", 1.0, 0.0)
@@ -385,8 +402,18 @@ def test_move_room_translates_and_keeps_input():
 def test_swap_rooms_exchanges_origins():
     prop = _two_rects()
     out = swap_rooms(prop, "a", "b")
-    assert [(p.x, p.y) for p in out["a"]] == [(10.0, 0.0), (14.0, 0.0), (14.0, 3.0), (10.0, 3.0)]
-    assert [(p.x, p.y) for p in out["b"]] == [(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)]
+    assert [(p.x, p.y) for p in out["a"]] == [
+        (10.0, 0.0),
+        (14.0, 0.0),
+        (14.0, 3.0),
+        (10.0, 3.0),
+    ]
+    assert [(p.x, p.y) for p in out["b"]] == [
+        (0.0, 0.0),
+        (4.0, 0.0),
+        (4.0, 3.0),
+        (0.0, 3.0),
+    ]
     with pytest.raises(KeyError):
         swap_rooms(prop, "a", "zzz")
 

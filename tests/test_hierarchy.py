@@ -68,7 +68,12 @@ def test_coarse_layout_unimplemented_topologies():
 
 
 def _overlaps(a, b) -> bool:
-    return a[0] < b[2] - 1e-9 and b[0] < a[2] - 1e-9 and a[1] < b[3] - 1e-9 and b[1] < a[3] - 1e-9
+    return (
+        a[0] < b[2] - 1e-9
+        and b[0] < a[2] - 1e-9
+        and a[1] < b[3] - 1e-9
+        and b[1] < a[3] - 1e-9
+    )
 
 
 def test_coarse_layout_no_overlap_and_centered_core():
@@ -252,7 +257,9 @@ def test_topology_coarse_in_bbox_and_scaled():
 def test_topology_coarse_deterministic_and_rejects():
     prog = _toy()
     boundary = [(0.0, 0.0), (20.0, 0.0), (20.0, 10.0), (0.0, 10.0)]
-    assert topology_coarse(prog, boundary, seed=1) == topology_coarse(prog, boundary, seed=1)
+    assert topology_coarse(prog, boundary, seed=1) == topology_coarse(
+        prog, boundary, seed=1
+    )
     with pytest.raises(ValueError):
         topology_coarse(prog, [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0)])
     empty = RoomProgram(nodes={}, edges=[])
